@@ -117,6 +117,7 @@
   /* Modal */
   .modal-backdrop{position:fixed;inset:0;background:rgba(20,30,40,.55);display:none;align-items:center;justify-content:center;z-index:100;padding:20px;backdrop-filter:blur(2px)}
   .modal-backdrop.active{display:flex}
+  .modal-backdrop.active > .modal{display:block;opacity:1;visibility:visible;position:relative;z-index:101}
   .modal{background:#fff;border-radius:12px;max-width:600px;width:100%;max-height:90vh;overflow-y:auto;box-shadow:0 20px 50px rgba(47,72,88,.35);border:1px solid var(--border-blue)}
   .modal header{background:linear-gradient(135deg,var(--blue),#1a2c38);padding:16px 20px;display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid var(--gold)}
   .modal header h3{margin:0;color:#fff;font-size:17px;font-family:'Playfair Display',Georgia,serif;letter-spacing:.5px;color:var(--gold-soft)}
