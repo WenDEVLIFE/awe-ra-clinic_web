@@ -124,7 +124,6 @@ function addDaysStr(n){
 function loadData(){
   const raw = localStorage.getItem(STORAGE_KEY);
   if(!raw){
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(defaultData));
     return JSON.parse(JSON.stringify(defaultData));
   }
   try {
@@ -178,21 +177,134 @@ async function syncToFirestore() {
   console.log("🔄 Syncing data to Firestore...");
 }
 
+// Force refresh UI when Firestore is ready
+function forceRefreshAllUI() {
+  console.log("🔄 Force refreshing all UI from Firestore...");
+  if (window.renderDashboard) window.renderDashboard();
+  if (window.renderClients) window.renderClients();
+  if (window.renderSchedule) window.renderSchedule();
+  if (window.renderInventory) window.renderInventory();
+  if (window.renderPackages) window.renderPackages();
+  if (window.renderTreatments) window.renderTreatments();
+  if (window.renderUpcoming) window.renderUpcoming();
+  if (window.renderSales) window.renderSales();
+  if (window.updateUpcomingBadge) window.updateUpcomingBadge();
+  console.log("✅ All UI refreshed");
+}
+
 function nextId(kind){ DB.counters[kind] = (DB.counters[kind]||0)+1; return DB.counters[kind]; }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
 function fmtDate(s){ if(!s) return ''; const d=new Date(s+'T00:00'); return d.toLocaleDateString('en-US',{year:'numeric',month:'short',day:'numeric'}); }
 function fmtTime(t){ if(!t) return ''; const [h,m]=t.split(':'); const hh=((+h+11)%12)+1; const ap=+h>=12?'PM':'AM'; return `${hh}:${m} ${ap}`; }
-function branchName(id){ const b = DB.branches.find(x=>x.id===id); return b?b.name:id; }
+function slugifyBranch(val){
+  return String(val==null ? '' : val)
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g,'-')
+    .replace(/^-+|-+$/g,'');
+}
+function normalizeBranchId(val){
+  const key = slugifyBranch(val);
+  if(!key) return '';
+  const match = (DB.branches||[]).find(b=>{
+    const id = slugifyBranch(b.id);
+    const name = slugifyBranch(b.name);
+    return key===id || key===name || key.includes(id) || id.includes(key) || key.includes(name) || name.includes(key);
+  });
+  return match ? match.id : key;
+}
+function branchMatches(value, branchId){
+  return normalizeBranchId(value) === normalizeBranchId(branchId);
+}
+function branchName(id){
+  const key = normalizeBranchId(id);
+  const b = DB.branches.find(x=>normalizeBranchId(x.id)===key || slugifyBranch(x.name)===key);
+  return b ? b.name : id;
+}
+function normalizeLabel(val){
+  return String(val == null ? '' : val).trim().toLowerCase().replace(/\s+/g, ' ');
+}
+function clientFullName(rec){
+  return normalizeLabel(`${rec?.fname || ''} ${rec?.lname || ''}`);
+}
+function findDuplicateClient(fname, lname, branch, excludeId){
+  const name = normalizeLabel(`${fname} ${lname}`);
+  const branchKey = normalizeBranchId(branch);
+  return (DB.clients || []).find(c => String(c.id) !== String(excludeId) && clientFullName(c) === name && normalizeBranchId(c.homeBranch) === branchKey) || null;
+}
+function findDuplicateBranch(name, excludeId){
+  const key = slugifyBranch(name);
+  return (DB.branches || []).find(b => String(b.id) !== String(excludeId) && slugifyBranch(b.name) === key) || null;
+}
+function findDuplicateAppointment(clientId, date, branch, excludeId){
+  const clientKey = String(clientId);
+  const branchKey = normalizeBranchId(branch);
+  return (DB.appointments || []).find(a => String(a.id) !== String(excludeId) && String(a.clientId) === clientKey && a.date === date && normalizeBranchId(a.branch) === branchKey) || null;
+}
+function findDuplicateInventoryItem(name, branch, excludeId){
+  const itemKey = normalizeLabel(name);
+  const branchKey = normalizeBranchId(branch);
+  return (DB.inventory || []).find(i => String(i.id) !== String(excludeId) && normalizeLabel(i.name) === itemKey && normalizeBranchId(i.branch) === branchKey) || null;
+}
+function findDuplicatePackage(clientId, treatmentId, branch, excludeId){
+  const clientKey = String(clientId);
+  const treatmentKey = String(treatmentId);
+  const branchKey = normalizeBranchId(branch);
+  return (DB.packages || []).find(p => String(p.id) !== String(excludeId) && String(p.clientId) === clientKey && String(p.treatmentId) === treatmentKey && normalizeBranchId(p.branch) === branchKey) || null;
+}
+function findClientById(clientId){
+  const key = String(clientId);
+  return (DB.clients || []).find(c => String(c.id) === key) || null;
+}
+function findAppointmentById(apptId){
+  const key = String(apptId);
+  return (DB.appointments || []).find(a => String(a.id) === key) || null;
+}
 
 let DB = loadData();
+window.DB = DB;
 let currentPage = 'dashboard';
 let calDate = new Date();
+
+const SessionManager = {
+  async setFirebaseUser(user, branchId){
+    if(!user) return;
+    const branch = normalizeBranchId(branchId || DB.session?.branch || 'gerona');
+    DB.session = {
+      user: {
+        email: user.email,
+        uid: user.uid,
+        name: user.displayName || (user.email ? user.email.split('@')[0] : 'User'),
+        role: 'user'
+      },
+      branch
+    };
+    window.DB = DB;
+    saveData();
+    const overlay = document.getElementById('login-overlay');
+    if(overlay) overlay.style.display = 'none';
+    const branchSelector = document.getElementById('branch-selector');
+    if(branchSelector) branchSelector.value = branch;
+    const userPill = document.getElementById('user-pill');
+    if(userPill) userPill.textContent = DB.session.user.name + ' (' + DB.session.user.role + ')';
+    refreshAll();
+    setTimeout(() => forceRefreshAllUI(), 250);
+  },
+  async clear(){
+    DB.session = { user:null, branch: normalizeBranchId(DB.session?.branch || 'gerona') || 'gerona' };
+    window.DB = DB;
+    saveData();
+    const overlay = document.getElementById('login-overlay');
+    if(overlay) overlay.style.display = 'flex';
+  }
+};
+window.SessionManager = SessionManager;
 
 // -------- Auth --------
 async function doLogin(){
   const email = document.getElementById('login-user').value.trim();
   const password = document.getElementById('login-pass').value;
-  const branch = document.getElementById('login-branch').value;
+  const branch = normalizeBranchId(document.getElementById('login-branch').value);
   
   if(!email || !password){ alert('Email and password are required'); return; }
   
@@ -201,23 +313,8 @@ async function doLogin(){
     if(window.DataLayer) {
       const result = await window.DataLayer.loginWithEmail(email, password);
       if(result.success) {
-        // Firebase login successful
-        const firebaseUser = result.user;
-        DB.session = {
-          user: {
-            email: firebaseUser.email,
-            uid: firebaseUser.uid,
-            name: firebaseUser.displayName || firebaseUser.email.split('@')[0],
-            role: 'user' // Default role, can be fetched from Firestore user profile
-          },
-          branch: branch
-        };
-        saveData();
-        document.getElementById('login-overlay').style.display='none';
-        document.getElementById('branch-selector').value = branch;
-        document.getElementById('user-pill').textContent = DB.session.user.name + ' (' + DB.session.user.role + ')';
-        console.log("✅ Login successful via Firebase:", firebaseUser.email);
-        refreshAll();
+        console.log("✅ Login successful via Firebase:", result.user.email);
+        await SessionManager.setFirebaseUser(result.user, branch);
         return;
       } else {
         alert('Login failed: ' + (result.error || 'Invalid credentials'));
@@ -239,8 +336,7 @@ async function doLogout(){
         console.log("✅ Logout successful");
       }
     }
-    DB.session.user = null;
-    saveData();
+    await SessionManager.clear();
     location.reload();
   } catch(error) {
     console.error("Logout error:", error);
@@ -248,7 +344,7 @@ async function doLogout(){
   }
 }
 function switchBranch(b){
-  DB.session.branch = b;
+  DB.session.branch = normalizeBranchId(b);
   saveData();
   refreshAll();
 }
@@ -267,17 +363,22 @@ function showPage(id, btn){
 function renderDashboard(){
   const br = DB.session.branch;
   document.getElementById('dash-branch-name').textContent = branchName(br);
-  document.getElementById('stat-clients').textContent = DB.clients.length;
+  const branchClients = DB.clients.filter(c=>(c.homeBranch||'')===br);
+  document.getElementById('stat-clients').textContent = branchClients.length;
   const today = todayStr();
   const in7 = addDaysStr(7);
-  const todayAppts = DB.appointments.filter(a=>a.branch===br && a.date===today);
-  const upcoming = DB.appointments.filter(a=>a.branch===br && a.date>=today && a.date<=in7);
+  const todayAppts = DB.appointments.filter(a=>branchMatches(a.branch, br) && a.date===today);
+  const upcoming = DB.appointments.filter(a=>branchMatches(a.branch, br) && a.date>=today && a.date<=in7);
   document.getElementById('stat-today').textContent = todayAppts.length;
   document.getElementById('stat-upcoming').textContent = upcoming.length;
-  const lowStock = DB.inventory.filter(i=>i.branch===br && i.qty <= i.reorder);
+  const lowStock = DB.inventory.filter(i=>branchMatches(i.branch, br) && i.qty <= i.reorder);
   document.getElementById('stat-lowstock').textContent = lowStock.length;
-  const activePkgs = DB.packages.filter(p=>p.branch===br && p.status==='Active');
+  const activePkgs = DB.packages.filter(p=>branchMatches(p.branch, br) && p.status==='Active');
   document.getElementById('stat-packages').textContent = activePkgs.length;
+  
+  // Debug logging
+  console.log(`Dashboard render: ${branchClients.length} clients at ${br} from ${window.useFirebase?.() ? 'Firestore' : 'localStorage'}`);
+  
   const totalBalance = activePkgs.reduce((sum,p)=>sum+pkgStats(p).balance, 0);
   document.getElementById('stat-balance').textContent = money(totalBalance);
 
@@ -310,8 +411,10 @@ function renderDashboard(){
 
 // -------- Clients --------
 function renderClients(){
+  const br = DB.session.branch;
   const q = (document.getElementById('client-search')?.value||'').toLowerCase();
   const filtered = DB.clients.filter(c=>{
+    if(!branchMatches(c.homeBranch, br)) return false;
     if(!q) return true;
     return (c.fname+' '+c.lname+' '+c.phone+' '+c.email).toLowerCase().includes(q);
   });
@@ -333,8 +436,10 @@ function renderClients(){
 // Populate the two <datalist> dropdowns with names already entered
 // elsewhere in the system (so reception doesn't have to retype them).
 function fillStaffDatalists(){
+  const br = DB.session.branch;
   const spec = new Set(), fac = new Set();
   (DB.clients||[]).forEach(c=>{
+    if((c.homeBranch||'')!==br) return;
     if(c.skinSpecialist) spec.add(c.skinSpecialist.trim());
     if(c.facialist) fac.add(c.facialist.trim());
   });
@@ -348,6 +453,10 @@ function openClientModal(id){
   fillStaffDatalists();
   if(id){
     const c = DB.clients.find(x=>x.id===id);
+    if(!c || !branchMatches(c.homeBranch, DB.session.branch)){
+      alert('You can only edit clients from the current branch.');
+      return;
+    }
     document.getElementById('client-modal-title').textContent = 'Edit Client';
     document.getElementById('client-id').value = c.id;
     document.getElementById('c-fname').value = c.fname||'';
@@ -374,6 +483,12 @@ function saveClient(){
   const fname = document.getElementById('c-fname').value.trim();
   const lname = document.getElementById('c-lname').value.trim();
   if(!fname || !lname){ alert('First and last name are required'); return; }
+  const branch = document.getElementById('c-branch').value;
+  const dupClient = findDuplicateClient(fname, lname, branch, id);
+  if(dupClient){
+    alert('A client with the same name already exists in this branch.');
+    return;
+  }
   const rec = {
     fname, lname,
     phone: document.getElementById('c-phone').value.trim(),
@@ -381,7 +496,7 @@ function saveClient(){
     bday: document.getElementById('c-bday').value,
     gender: document.getElementById('c-gender').value,
     address: document.getElementById('c-address').value.trim(),
-    homeBranch: document.getElementById('c-branch').value,
+    homeBranch: branch,
     skinSpecialist: document.getElementById('c-specialist').value.trim(),
     facialist: document.getElementById('c-facialist').value.trim(),
     medical: document.getElementById('c-medical').value,
@@ -409,6 +524,11 @@ function saveClient(){
 }
 function deleteClient(id){
   if(!confirm('Delete this client? Their appointments will remain but show "Unknown client".')) return;
+  const c = DB.clients.find(x=>x.id===id);
+  if(!c || !branchMatches(c.homeBranch, DB.session.branch)){
+    alert('You can only delete clients from the current branch.');
+    return;
+  }
   DB.clients = DB.clients.filter(x=>x.id!==id);
   // Sync to Firestore if available
   if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
@@ -420,8 +540,9 @@ function deleteClient(id){
 // Rolls up everything the client owes / has paid.
 // Includes packages (payments vs. totalPrice) + product purchases (paid vs. unpaid).
 function clientBalance(clientId){
-  const pkgs = DB.packages.filter(p=>p.clientId===clientId);
-  const purs = (DB.purchases||[]).filter(p=>p.clientId===clientId);
+  const br = DB.session.branch;
+  const pkgs = DB.packages.filter(p=>p.clientId===clientId && branchMatches(p.branch, br));
+  const purs = (DB.purchases||[]).filter(p=>p.clientId===clientId && branchMatches(p.branch, br));
   let pkgPaid = 0, pkgBalance = 0, purPaid = 0, purUnpaid = 0;
   pkgs.forEach(p=>{
     const s = pkgStats(p);
@@ -443,7 +564,11 @@ function clientBalance(clientId){
 function viewClient(id){
   currentClientViewId = id;
   const c = DB.clients.find(x=>x.id===id);
-  const history = DB.appointments.filter(a=>a.clientId===id).sort((a,b)=>b.date.localeCompare(a.date));
+  if(!c || !branchMatches(c.homeBranch, DB.session.branch)){
+    alert('You can only view clients from the current branch.');
+    return;
+  }
+  const history = DB.appointments.filter(a=>a.clientId===id && branchMatches(a.branch, DB.session.branch)).sort((a,b)=>b.date.localeCompare(a.date));
   const histRows = history.length ? history.map(a=>`<tr><td>${fmtDate(a.date)} ${fmtTime(a.time)}</td><td>${esc(a.service||'')}</td><td>${esc(branchName(a.branch))}</td><td>${esc(a.status)}</td></tr>`).join('') : '<tr><td colspan="4" style="text-align:center;color:var(--muted)">No appointment history</td></tr>';
 
   const bal = clientBalance(id);
@@ -534,7 +659,7 @@ function openPurchaseModal(clientId, purchaseId){
   document.getElementById('purchase-modal-title').textContent = purchaseId ? 'Edit Purchase' : 'Add Product Purchase';
   // Populate item dropdown with current branch's inventory
   const br = DB.session.branch;
-  const items = DB.inventory.filter(i=>i.branch===br).slice().sort((a,b)=>a.name.localeCompare(b.name));
+  const items = DB.inventory.filter(i=>branchMatches(i.branch, br)).slice().sort((a,b)=>a.name.localeCompare(b.name));
   const sel = document.getElementById('pur-item');
   sel.innerHTML = '<option value="">-- select product --</option>' + items.map(i=>`<option value="${i.id}" data-price="${i.price||0}" data-qty="${i.qty}" data-unit="${esc(i.unit||'')}">${esc(i.name)} — on hand: ${i.qty} ${esc(i.unit||'')} @ ${money(i.price||0)}</option>`).join('');
   if(purchaseId){
@@ -706,13 +831,10 @@ function getSalesDate(){
   return el.value;
 }
 function getSalesBranchScope(){
-  const sel = document.getElementById('sales-branch-filter');
-  return sel ? sel.value : 'current';
+  return 'current';
 }
 function salesBranchMatch(b){
-  const scope = getSalesBranchScope();
-  if(scope==='all') return true;
-  return b === DB.session.branch;
+  return branchMatches(b, DB.session.branch);
 }
 function goSalesToday(){
   const el = document.getElementById('sales-date');
@@ -782,8 +904,7 @@ function collectDayExpenses(date){
 }
 function renderSales(){
   // Set the branch label
-  document.getElementById('sales-branch-name').textContent =
-    getSalesBranchScope()==='all' ? 'All Branches' : branchName(DB.session.branch);
+  document.getElementById('sales-branch-name').textContent = branchName(DB.session.branch);
   const date = getSalesDate();
   const payments = collectDayPayments(date);
   const expenses = collectDayExpenses(date);
@@ -817,9 +938,7 @@ function renderSales(){
       const surchargeCell = p.surcharge>0
         ? money(p.surcharge)
         : (isCard && p.surchargeWaived ? '<span style="color:var(--muted);font-style:italic">waived</span>' : '—');
-      const branchTag = getSalesBranchScope()==='all'
-        ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">${esc(branchName(p.branch))}</div>`
-        : '';
+      const branchTag = '';
       const sourceTag = p.kind==='purchase'
         ? `<span class="pill" style="background:#fde68a;color:#92400e">Product</span>`
         : `<span class="pill" style="background:#dbeafe;color:#1e40af">Package</span>`;
@@ -849,9 +968,7 @@ function renderSales(){
     expEl.innerHTML = '<div class="empty">No expenses recorded for this date. Click <b>+ Add Expense</b> to log one.</div>';
   } else {
     const rows = expenses.map(e=>{
-      const branchTag = getSalesBranchScope()==='all'
-        ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">${esc(branchName(e.branch))}</div>`
-        : '';
+      const branchTag = '';
       return `<tr>
         <td><b>${esc(e.category||'')}</b>${branchTag}</td>
         <td>${esc(e.notes||'')}</td>
@@ -982,9 +1099,9 @@ function renderCalendar(){
   for(let i=0;i<firstDay;i++) html+=`<div class="cal-cell other-month"></div>`;
   for(let d=1;d<=daysInMonth;d++){
     const ds = `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-    const dayAppts = DB.appointments.filter(a=>a.branch===br && a.date===ds).sort((a,b)=>a.time.localeCompare(b.time));
+    const dayAppts = DB.appointments.filter(a=>branchMatches(a.branch, br) && a.date===ds).sort((a,b)=>a.time.localeCompare(b.time));
     const apptHtml = dayAppts.slice(0,3).map(a=>{
-      const c = DB.clients.find(x=>x.id===a.clientId);
+      const c = findClientById(a.clientId);
       const name = c ? c.fname : '?';
       return `<div class="appt" title="${esc(fmtTime(a.time)+' '+(c?c.fname+' '+c.lname:'')+' - '+(a.service||''))}" onclick="event.stopPropagation();openApptModal(${a.id})">${fmtTime(a.time)} ${esc(name)}</div>`;
     }).join('');
@@ -996,11 +1113,11 @@ function renderCalendar(){
 function renderApptList(){
   const br = DB.session.branch;
   const today = todayStr();
-  const list = DB.appointments.filter(a=>a.branch===br && a.date>=today).sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)).slice(0,20);
+  const list = DB.appointments.filter(a=>branchMatches(a.branch, br) && a.date>=today).sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)).slice(0,20);
   const el = document.getElementById('appt-list');
   if(!list.length){ el.innerHTML = '<div class="empty">No upcoming appointments at this branch.</div>'; return; }
   const rows = list.map(a=>{
-    const c = DB.clients.find(x=>x.id===a.clientId);
+    const c = findClientById(a.clientId);
     return `<tr>
       <td>${fmtDate(a.date)}</td>
       <td>${fmtTime(a.time)}</td>
@@ -1015,7 +1132,8 @@ function renderApptList(){
 }
 function fillPackageSelect(clientId, selectedId){
   const sel = document.getElementById('a-package');
-  const pkgs = DB.packages.filter(p=>p.clientId===clientId && p.status==='Active');
+  const clientKey = String(clientId);
+  const pkgs = DB.packages.filter(p=>String(p.clientId)===clientKey && p.status==='Active');
   sel.innerHTML = '<option value="">— none —</option>' + pkgs.map(p=>{
     const s = pkgStats(p);
     return `<option value="${p.id}" ${selectedId==p.id?'selected':''}>${esc(p.packageName)} (${s.sessionsUsed}/${p.totalSessions} used)</option>`;
@@ -1027,14 +1145,18 @@ function openApptModal(id, prefillDate){
   fillBranchSelect('a-branch');
   document.getElementById('appt-delete-btn').style.display = id ? 'inline-block' : 'none';
   if(id){
-    const a = DB.appointments.find(x=>x.id===id);
+    const a = findAppointmentById(id);
+    if(!a){
+      alert('Appointment not found.');
+      return;
+    }
     document.getElementById('appt-modal-title').textContent = 'Edit Appointment';
     document.getElementById('appt-id').value = a.id;
-    document.getElementById('a-client').value = a.clientId;
+    document.getElementById('a-client').value = String(a.clientId);
     document.getElementById('a-date').value = a.date;
     document.getElementById('a-time').value = a.time;
     document.getElementById('a-duration').value = a.duration;
-    document.getElementById('a-branch').value = a.branch;
+    document.getElementById('a-branch').value = normalizeBranchId(a.branch);
     document.getElementById('a-service').value = a.service||'';
     document.getElementById('a-therapist').value = a.therapist||'';
     document.getElementById('a-status').value = a.status||'Booked';
@@ -1046,7 +1168,7 @@ function openApptModal(id, prefillDate){
     document.getElementById('a-date').value = prefillDate || todayStr();
     document.getElementById('a-time').value = '10:00';
     document.getElementById('a-duration').value = 60;
-    document.getElementById('a-branch').value = DB.session.branch;
+    document.getElementById('a-branch').value = normalizeBranchId(DB.session.branch);
     document.getElementById('a-service').value = '';
     document.getElementById('a-therapist').value = '';
     document.getElementById('a-status').value = 'Booked';
@@ -1054,7 +1176,7 @@ function openApptModal(id, prefillDate){
     fillPackageSelect(0);
   }
   // Refresh package list if user changes client
-  document.getElementById('a-client').onchange = e => fillPackageSelect(+e.target.value);
+  document.getElementById('a-client').onchange = e => fillPackageSelect(e.target.value, document.getElementById('a-package').value);
   openModal('appt-modal');
 }
 function saveAppt(){
@@ -1063,11 +1185,17 @@ function saveAppt(){
   const date = document.getElementById('a-date').value;
   const time = document.getElementById('a-time').value;
   if(!clientId||!date||!time){ alert('Client, date and time are required'); return; }
+  const branch = document.getElementById('a-branch').value;
+  const dupAppt = findDuplicateAppointment(clientId, date, branch, id);
+  if(dupAppt){
+    alert('This client already has an appointment on the same day in this branch.');
+    return;
+  }
   const pkgIdVal = document.getElementById('a-package').value;
   const rec = {
     clientId, date, time,
     duration: +document.getElementById('a-duration').value||60,
-    branch: document.getElementById('a-branch').value,
+    branch,
     service: document.getElementById('a-service').value.trim(),
     therapist: document.getElementById('a-therapist').value.trim(),
     status: document.getElementById('a-status').value,
@@ -1178,7 +1306,7 @@ function renderInventory(){
   const br = DB.session.branch;
   document.getElementById('inv-branch-name').textContent = branchName(br);
   const q = (document.getElementById('inv-search')?.value||'').toLowerCase();
-  const items = DB.inventory.filter(i=>i.branch===br && (!q||i.name.toLowerCase().includes(q)||(i.category||'').toLowerCase().includes(q)));
+  const items = DB.inventory.filter(i=>branchMatches(i.branch, br) && (!q||i.name.toLowerCase().includes(q)||(i.category||'').toLowerCase().includes(q)));
   const el = document.getElementById('inv-table');
   if(!items.length){ el.innerHTML = '<div class="empty">No inventory items. Click "+ New Item" to add one.</div>'; return; }
   const rows = items.map(i=>{
@@ -1253,8 +1381,14 @@ function saveInv(){
   const id = document.getElementById('inv-id').value;
   const name = document.getElementById('i-name').value.trim();
   if(!name){ alert('Item name is required'); return; }
+  const branch = DB.session.branch;
+  const dupItem = findDuplicateInventoryItem(name, branch, id);
+  if(dupItem){
+    alert('This inventory item already exists in the current branch.');
+    return;
+  }
   const rec = {
-    branch: DB.session.branch,
+    branch,
     name,
     category: document.getElementById('i-category').value,
     unit: document.getElementById('i-unit').value.trim(),
@@ -1300,7 +1434,7 @@ function deleteInv(){
 function openTransferModal(){
   const sel = document.getElementById('t-item');
   const br = DB.session.branch;
-  const items = DB.inventory.filter(i=>i.branch===br);
+  const items = DB.inventory.filter(i=>branchMatches(i.branch, br));
   sel.innerHTML = items.map(i=>`<option value="${i.id}">${esc(i.name)} — on hand: ${i.qty}</option>`).join('');
   fillBranchSelect('t-from');
   fillBranchSelect('t-to');
@@ -1318,7 +1452,7 @@ function doTransfer(){
   const src = DB.inventory.find(x=>x.id===itemId);
   if(!src || src.qty<qty){ alert('Not enough stock'); return; }
   src.qty -= qty;
-  let dest = DB.inventory.find(x=>x.branch===to && x.name===src.name);
+  const dest = DB.inventory.find(x=>branchMatches(x.branch, to) && x.name===src.name);
   if(dest){ dest.qty += qty; }
   else {
     DB.inventory.push({...src, id:nextId('inv'), branch:to, qty});
@@ -1329,7 +1463,7 @@ function doTransfer(){
     if(dest && DB.inventory.find(x=>x.id===dest.id)){
       window.FirestoreCRUD.update('inventory', String(dest.id), dest).catch(err => console.error("Firestore update error:", err));
     } else if(dest && !DB.inventory.find(x=>x.id===dest.id)) {
-      const newDest = DB.inventory.find(x=>x.branch===to && x.name===src.name);
+      const newDest = DB.inventory.find(x=>branchMatches(x.branch, to) && x.name===src.name);
       if(newDest) window.FirestoreCRUD.add('inventory', newDest).catch(err => console.error("Firestore add error:", err));
     }
   }
@@ -1634,7 +1768,7 @@ function allInventoryNames(){
 function applyStockChange(branchId, supplies, sign){
   const warnings = [];
   (supplies||[]).forEach(s=>{
-    const inv = DB.inventory.find(i=>i.branch===branchId && i.name===s.itemName);
+    const inv = DB.inventory.find(i=>branchMatches(i.branch, branchId) && i.name===s.itemName);
     if(!inv){
       warnings.push(`• "${s.itemName}" not found in ${branchName(branchId)} inventory — please add it so stock can be tracked.`);
       return;
@@ -1699,7 +1833,7 @@ function renderPackages(){
   document.getElementById('pkg-branch-name').textContent = branchName(br);
   const q = (document.getElementById('pkg-search')?.value||'').toLowerCase();
   const filter = document.getElementById('pkg-filter')?.value||'Active';
-  let list = DB.packages.filter(p=>p.branch===br);
+  let list = DB.packages.filter(p=>branchMatches(p.branch, br));
   if(filter!=='all') list = list.filter(p=>p.status===filter);
   if(q) list = list.filter(p=>{
     const c = DB.clients.find(x=>x.id===p.clientId);
@@ -1818,11 +1952,17 @@ function savePkg(){
   const treatmentId = +document.getElementById('p-treatment').value;
   const total = +document.getElementById('p-total').value||0;
   if(!clientId || !treatmentId || total<1){ alert('Client, treatment and total sessions are required'); return; }
+  const branch = DB.session.branch;
+  const dupPkg = findDuplicatePackage(clientId, treatmentId, branch, id);
+  if(dupPkg){
+    alert('This package already exists for the same client in the current branch.');
+    return;
+  }
   const t = DB.treatments.find(x=>x.id===treatmentId);
   const downpayment = +document.getElementById('p-down').value||0;
   const rec = {
     clientId,
-    branch: DB.session.branch,
+    branch,
     treatmentId,
     packageName: t ? t.name : '(unknown)',
     totalSessions: total,
@@ -2153,7 +2293,7 @@ function hasUpcomingAppt(pkg){
 function getPendingFollowUps(branch){
   const tomorrow = addDaysStr(1);
   const list = [];
-  DB.packages.filter(p=>p.branch===branch && p.status==='Active').forEach(p=>{
+  DB.packages.filter(p=>branchMatches(p.branch, branch) && p.status==='Active').forEach(p=>{
     if(hasUpcomingAppt(p)) return;
     const due = computeNextDue(p);
     if(!due) return;
@@ -2172,26 +2312,27 @@ function renderUpcoming(){
 
   // Tomorrow's confirmed appointments
   const tAppts = DB.appointments
-    .filter(a=>a.branch===br && a.date===tomorrow && a.status!=='Cancelled' && a.status!=='No-show')
+    .filter(a=>branchMatches(a.branch, br) && a.date===tomorrow && a.status!=='Cancelled' && a.status!=='No-show')
     .sort((a,b)=>a.time.localeCompare(b.time));
   const elA = document.getElementById('tomorrow-appts');
   if(!tAppts.length){
     elA.innerHTML = '<div class="empty">No confirmed appointments for tomorrow yet.</div>';
   } else {
     const rows = tAppts.map(a=>{
-      const c = DB.clients.find(x=>x.id===a.clientId);
+      const c = findClientById(a.clientId);
       const phone = c && c.phone ? esc(c.phone) : '—';
       const pkg = a.packageId ? DB.packages.find(p=>p.id===a.packageId) : null;
       return `<tr>
         <td>${fmtTime(a.time)}</td>
         <td><b>${c?esc(c.fname+' '+c.lname):'—'}</b><div style="font-size:11px;color:var(--muted)">${phone}</div></td>
         <td>${esc(a.service||'')}${pkg?'<div style="font-size:11px;color:var(--muted)">pkg: '+esc(pkg.packageName)+'</div>':''}</td>
+        <td><span class="pill info">${esc(branchName(a.branch))}</span></td>
         <td>${esc(a.therapist||'')}</td>
         <td><span class="pill ${a.status==='Confirmed'?'ok':'info'}">${esc(a.status)}</span></td>
         <td><button class="btn small secondary" onclick="openApptModal(${a.id})">Open</button></td>
       </tr>`;
     }).join('');
-    elA.innerHTML = `<table><thead><tr><th>Time</th><th>Client</th><th>Service</th><th>Therapist</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    elA.innerHTML = `<table><thead><tr><th>Time</th><th>Client</th><th>Service</th><th>Branch</th><th>Therapist</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
   // Pending follow-ups
@@ -2246,7 +2387,7 @@ function updateUpcomingBadge(){
   const br = DB.session.branch;
   const pending = getPendingFollowUps(br).length;
   const tomorrow = addDaysStr(1);
-  const tAppts = DB.appointments.filter(a=>a.branch===br && a.date===tomorrow && a.status!=='Cancelled' && a.status!=='No-show').length;
+  const tAppts = DB.appointments.filter(a=>branchMatches(a.branch, br) && a.date===tomorrow && a.status!=='Cancelled' && a.status!=='No-show').length;
   const total = pending + tAppts;
   if(total>0){ badge.textContent = total; badge.style.display = 'inline-block'; }
   else { badge.style.display = 'none'; }
@@ -2254,9 +2395,140 @@ function updateUpcomingBadge(){
 
 // -------- Settings --------
 function renderSettings(){
-  const rows = DB.branches.map(b=>`<tr><td><b>${esc(b.name)}</b></td><td>${esc(b.address||'')}</td><td>${esc(b.phone||'')}</td></tr>`).join('');
-  document.getElementById('branches-list').innerHTML = `<table><thead><tr><th>Branch</th><th>Address</th><th>Phone</th></tr></thead><tbody>${rows}</tbody></table>`;
+  const rows = DB.branches.map(b=>`<tr>
+    <td><b>${esc(b.name)}</b></td>
+    <td>${esc(b.address||'')}</td>
+    <td>${esc(b.phone||'')}</td>
+    <td style="display:flex;gap:6px;flex-wrap:wrap">
+      <button class="btn small secondary" onclick="openBranchModal('${esc(String(b.id))}')">Edit</button>
+      <button class="btn small danger" onclick="deleteBranch('${esc(String(b.id))}')">Delete</button>
+    </td>
+  </tr>`).join('');
+  document.getElementById('branches-list').innerHTML = `<table><thead><tr><th>Branch</th><th>Address</th><th>Phone</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>`;
   renderTreatments();
+}
+
+function branchSlug(name){
+  const base = (name||'').toLowerCase().trim()
+    .replace(/[^a-z0-9]+/g,'-')
+    .replace(/^-+|-+$/g,'');
+  return base || ('branch-' + Date.now());
+}
+
+function openBranchModal(id){
+  if(id){
+    const b = DB.branches.find(x=>String(x.id)===String(id));
+    if(!b){ alert('Branch not found.'); return; }
+    document.getElementById('branch-modal-title').textContent = 'Edit Branch';
+    document.getElementById('branch-id').value = b.id;
+    document.getElementById('branch-name').value = b.name||'';
+    document.getElementById('branch-address').value = b.address||'';
+    document.getElementById('branch-phone').value = b.phone||'';
+  } else {
+    document.getElementById('branch-modal-title').textContent = 'Add Branch';
+    document.getElementById('branch-id').value = '';
+    document.getElementById('branch-name').value = '';
+    document.getElementById('branch-address').value = '';
+    document.getElementById('branch-phone').value = '';
+  }
+  openModal('branch-modal');
+}
+
+function getBranchUsageSummary(branchId){
+  const usage = {
+    clients: DB.clients.filter(c=>(c.homeBranch||'')===branchId).length,
+    appointments: DB.appointments.filter(a=>(a.branch||'')===branchId).length,
+    inventory: DB.inventory.filter(i=>(i.branch||'')===branchId).length,
+    packages: DB.packages.filter(p=>(p.branch||'')===branchId).length,
+    expenses: (DB.expenses||[]).filter(e=>(e.branch||'')===branchId).length,
+    purchases: (DB.purchases||[]).filter(p=>(p.branch||'')===branchId).length,
+    payments: (DB.payments||[]).filter(p=>(p.branch||'')===branchId).length,
+    sessions: (DB.sessions||[]).filter(s=>(s.branch||'')===branchId).length,
+  };
+  usage.total = Object.values(usage).reduce((sum,v)=>sum + (typeof v === 'number' ? v : 0), 0);
+  return usage;
+}
+
+async function deleteBranch(branchId){
+  const branch = DB.branches.find(b=>String(b.id)===String(branchId));
+  if(!branch){ alert('Branch not found.'); return; }
+  if(DB.branches.length <= 1){ alert('You must keep at least one branch.'); return; }
+
+  const usage = getBranchUsageSummary(branchId);
+  if(usage.total > 0){
+    alert(`Cannot delete ${branch.name} yet. It still has:\n\nClients: ${usage.clients}\nAppointments: ${usage.appointments}\nInventory: ${usage.inventory}\nPackages: ${usage.packages}\nExpenses: ${usage.expenses}\nPurchases: ${usage.purchases}\nPayments: ${usage.payments}\nSessions: ${usage.sessions}`);
+    return;
+  }
+
+  if(!confirm(`Delete branch "${branch.name}"? This cannot be undone.`)) return;
+
+  DB.branches = DB.branches.filter(b=>String(b.id)!==String(branchId));
+  if(DB.session && DB.session.branch === branchId){
+    DB.session.branch = DB.branches[0].id;
+  }
+
+  if(window.useFirebase && window.useFirebase()){
+    try {
+      await firebase.firestore().collection('branches').doc(String(branchId)).delete();
+    } catch(err){
+      console.error('Firestore branch delete error:', err);
+    }
+  }
+
+  saveData();
+  refreshBranchSelectors();
+  renderSettings();
+  refreshAll();
+}
+
+async function saveBranch(){
+  const id = document.getElementById('branch-id').value;
+  const name = document.getElementById('branch-name').value.trim();
+  const address = document.getElementById('branch-address').value.trim();
+  const phone = document.getElementById('branch-phone').value.trim();
+  if(!name){ alert('Branch name is required.'); return; }
+  const dupBranch = findDuplicateBranch(name, id);
+  if(dupBranch){
+    alert('A branch with that name already exists.');
+    return;
+  }
+
+  if(id){
+    const idx = DB.branches.findIndex(x=>String(x.id)===String(id));
+    if(idx<0){ alert('Branch not found.'); return; }
+    DB.branches[idx] = {...DB.branches[idx], name, address, phone};
+    if(window.useFirebase && window.useFirebase()){
+      try {
+        await firebase.firestore().collection('branches').doc(String(id)).set({
+          name, address, phone, updatedAt: new Date()
+        }, { merge:true });
+      } catch(err){
+        console.error('Firestore branch update error:', err);
+      }
+    }
+  } else {
+    let newId = branchSlug(name);
+    let n = 2;
+    while(DB.branches.some(b=>String(b.id)===newId)){
+      newId = `${branchSlug(name)}-${n++}`;
+    }
+    const rec = { id:newId, name, address, phone };
+    DB.branches.push(rec);
+    if(window.useFirebase && window.useFirebase()){
+      try {
+        await firebase.firestore().collection('branches').doc(String(newId)).set({
+          name, address, phone, createdAt: new Date()
+        }, { merge:true });
+      } catch(err){
+        console.error('Firestore branch add error:', err);
+      }
+    }
+  }
+
+  saveData();
+  refreshBranchSelectors();
+  closeModal('branch-modal');
+  renderSettings();
 }
 function exportAllData(){
   const blob = new Blob([JSON.stringify(DB,null,2)], {type:'application/json'});
@@ -2270,7 +2542,7 @@ function importData(ev){
   if(!f) return;
   const r = new FileReader();
   r.onload = e=>{
-    try { DB = JSON.parse(e.target.result); saveData(); alert('Data imported'); location.reload(); }
+    try { DB = JSON.parse(e.target.result); window.DB = DB; saveData(); alert('Data imported'); location.reload(); }
     catch(err){ alert('Invalid file'); }
   };
   r.readAsText(f);
@@ -2285,8 +2557,28 @@ function resetAllData(){
 function fillBranchSelect(id){
   document.getElementById(id).innerHTML = DB.branches.map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
 }
+function refreshBranchSelectors(){
+  const sel = document.getElementById('login-branch');
+  const topSel = document.getElementById('branch-selector');
+  const prevLogin = sel ? (sel.value || (DB.session && DB.session.branch) || 'gerona') : 'gerona';
+  const prevTop = topSel ? (topSel.value || (DB.session && DB.session.branch) || 'gerona') : 'gerona';
+  const branches = (DB.branches||[]).filter(b=>b && b.id && b.name);
+  if(!branches.length) return;
+  const html = branches.map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('');
+  if(sel){
+    sel.innerHTML = html;
+    sel.value = branches.some(b=>b.id===prevLogin) ? prevLogin : branches[0].id;
+  }
+  if(topSel){
+    topSel.innerHTML = html;
+    topSel.value = branches.some(b=>b.id===prevTop) ? prevTop : branches[0].id;
+  }
+}
+window.refreshBranchSelectors = refreshBranchSelectors;
+window.refreshLoginBranchOptions = refreshBranchSelectors;
 function fillClientSelect(id){
-  const sorted = DB.clients.slice().sort((a,b)=>(a.lname+a.fname).localeCompare(b.lname+b.fname));
+  const br = DB.session.branch;
+  const sorted = DB.clients.filter(c=>branchMatches(c.homeBranch, br)).slice().sort((a,b)=>(a.lname+a.fname).localeCompare(b.lname+b.fname));
   document.getElementById(id).innerHTML = '<option value="">-- select client --</option>' + sorted.map(c=>`<option value="${c.id}">${esc(c.lname+', '+c.fname)} ${c.phone?'('+esc(c.phone)+')':''}</option>`).join('');
 }
 function openModal(id){
@@ -2343,32 +2635,13 @@ function refreshAll(){
 window.onFirebaseReady = function(firebaseUser) {
   if(firebaseUser) {
     console.log("🔐 Restoring Firebase session for:", firebaseUser.email);
-    // Session already exists in DB, just hide login overlay
-    if(DB.session && DB.session.user) {
-      document.getElementById('login-overlay').style.display='none';
-      refreshAll();
-      return;
-    }
-    // If no session in localStorage but Firebase user exists, create one
-    DB.session = {
-      user: {
-        email: firebaseUser.email,
-        uid: firebaseUser.uid,
-        name: firebaseUser.displayName || firebaseUser.email.split('@')[0],
-        role: 'user'
-      },
-      branch: DB.session?.branch || 'gerona'
-    };
-    saveData();
-    document.getElementById('login-overlay').style.display='none';
-    document.getElementById('branch-selector').value = DB.session.branch;
-    document.getElementById('user-pill').textContent = DB.session.user.name + ' (' + DB.session.user.role + ')';
+    SessionManager.setFirebaseUser(firebaseUser, DB.session?.branch || document.getElementById('login-branch')?.value || 'gerona');
     console.log("✅ Session restored from Firebase auth");
-    refreshAll();
   }
 };
 
 window.addEventListener('DOMContentLoaded', ()=>{
+  refreshBranchSelectors();
   // Check if Firebase has initialized with a user
   if(window.isFirebaseReady && window.isFirebaseReady()) {
     const firebaseUser = window.getCurrentFirebaseUser ? window.getCurrentFirebaseUser() : null;
@@ -2378,6 +2651,17 @@ window.addEventListener('DOMContentLoaded', ()=>{
       return;
     }
   }
+
+  // If Firebase auth hasn't finished yet, give it a short moment before falling back.
+  setTimeout(()=>{
+    const firebaseUser = window.getCurrentFirebaseUser ? window.getCurrentFirebaseUser() : null;
+    if(firebaseUser && typeof window.onFirebaseReady === 'function' && (!DB.session || !DB.session.user)){
+      console.log("🔐 Firebase user found after initial load, restoring session...");
+      window.onFirebaseReady(firebaseUser);
+      return;
+    }
+    if(window.SessionManager && window.SessionManager && window.SessionManager._didRestore) return;
+  }, 500);
   
   // Check localStorage for existing session (non-Firebase fallback)
   if(DB.session && DB.session.user){
@@ -2385,5 +2669,7 @@ window.addEventListener('DOMContentLoaded', ()=>{
     document.getElementById('branch-selector').value = DB.session.branch;
     document.getElementById('user-pill').textContent = DB.session.user.name + ' (' + DB.session.user.role + ')';
     refreshAll();
+    // Also refresh after Firestore listeners connect (1-2 seconds)
+    setTimeout(() => forceRefreshAllUI(), 1500);
   }
 });

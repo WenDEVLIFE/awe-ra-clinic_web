@@ -110,6 +110,7 @@ class DataLayer {
   static async loginWithEmail(email, password) {
     try {
       if (!auth) throw new Error("Firebase Auth not initialized");
+      await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
       const result = await auth.signInWithEmailAndPassword(email, password);
       console.log("✅ Firebase login successful");
       return { success: true, user: result.user };

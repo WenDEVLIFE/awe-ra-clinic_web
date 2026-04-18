@@ -269,6 +269,9 @@
     <p class="page-sub">Branches, users, and data management</p>
 
     <h3>Branches</h3>
+    <div class="toolbar">
+      <button class="btn" onclick="openBranchModal()">+ Add Branch</button>
+    </div>
     <div id="branches-list"></div>
 
     <h3 style="margin-top:24px">Services Catalog</h3>
@@ -685,6 +688,22 @@
     <div class="footer">
       <button class="btn secondary" onclick="closeModal('expense-modal')">Cancel</button>
       <button class="btn" onclick="saveExpense()">Save Expense</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="branch-modal">
+  <div class="modal">
+    <header><h3 id="branch-modal-title">Add Branch</h3><button class="close-x" onclick="closeModal('branch-modal')">×</button></header>
+    <div class="body">
+      <input type="hidden" id="branch-id"/>
+      <div class="form-row"><label>Branch Name *</label><input type="text" id="branch-name" placeholder="e.g. Paniqui, Tarlac"/></div>
+      <div class="form-row"><label>Address</label><input type="text" id="branch-address" placeholder="Branch address"/></div>
+      <div class="form-row"><label>Phone</label><input type="text" id="branch-phone" placeholder="Phone number"/></div>
+    </div>
+    <div class="footer">
+      <button class="btn secondary" onclick="closeModal('branch-modal')">Cancel</button>
+      <button class="btn" onclick="saveBranch()">Save Branch</button>
     </div>
   </div>
 </div>
