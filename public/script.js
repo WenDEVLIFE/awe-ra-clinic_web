@@ -2123,8 +2123,37 @@ function fillClientSelect(id){
   const sorted = DB.clients.slice().sort((a,b)=>(a.lname+a.fname).localeCompare(b.lname+b.fname));
   document.getElementById(id).innerHTML = '<option value="">-- select client --</option>' + sorted.map(c=>`<option value="${c.id}">${esc(c.lname+', '+c.fname)} ${c.phone?'('+esc(c.phone)+')':''}</option>`).join('');
 }
-function openModal(id){ document.getElementById(id).classList.add('active'); }
-function closeModal(id){ document.getElementById(id).classList.remove('active'); }
+function openModal(id){
+  const backdrop = document.getElementById(id);
+  if(!backdrop) return;
+  backdrop.classList.add('active');
+  // Defensive inline styles in case external CSS overrides generic ".modal" rules.
+  backdrop.style.display = 'flex';
+  backdrop.style.zIndex = '1000';
+  const card = backdrop.querySelector('.modal') || backdrop.firstElementChild;
+  if(card){
+    card.style.display = 'block';
+    card.style.opacity = '1';
+    card.style.visibility = 'visible';
+    card.style.position = 'relative';
+    card.style.zIndex = '1001';
+  }
+}
+function closeModal(id){
+  const backdrop = document.getElementById(id);
+  if(!backdrop) return;
+  backdrop.classList.remove('active');
+  backdrop.style.display = '';
+  backdrop.style.zIndex = '';
+  const card = backdrop.querySelector('.modal') || backdrop.firstElementChild;
+  if(card){
+    card.style.display = '';
+    card.style.opacity = '';
+    card.style.visibility = '';
+    card.style.position = '';
+    card.style.zIndex = '';
+  }
+}
 
 function refreshAll(){
   if(currentPage==='dashboard') renderDashboard();
