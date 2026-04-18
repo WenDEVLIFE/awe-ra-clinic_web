@@ -94,6 +94,59 @@ async function syncAllDataToFirestore() {
   }
 }
 
+// Replace Firestore contents with imported data.
+// This is intended for restore/import flows where the uploaded file is the source of truth.
+async function replaceAllDataInFirestore(sourceDB) {
+  if (!window.useFirebase || !window.useFirebase()) {
+    console.error("❌ Firebase not available");
+    return;
+  }
+
+  if (!sourceDB) {
+    console.error("❌ No imported DB data to sync");
+    return;
+  }
+
+  try {
+    const db = firebase.firestore();
+    console.log("🔄 Replacing Firestore data from imported backup...");
+
+    const collections = [
+      { name: 'clients', data: sourceDB.clients || [] },
+      { name: 'appointments', data: sourceDB.appointments || [] },
+      { name: 'inventory', data: sourceDB.inventory || [] },
+      { name: 'packages', data: sourceDB.packages || [] },
+      { name: 'treatments', data: sourceDB.treatments || [] },
+      { name: 'expenses', data: sourceDB.expenses || [] },
+      { name: 'purchases', data: sourceDB.purchases || [] },
+      { name: 'branches', data: sourceDB.branches || [] },
+      { name: 'payments', data: sourceDB.payments || [] },
+      { name: 'sessions', data: sourceDB.sessions || [] }
+    ];
+
+    for (const col of collections) {
+      const existingSnap = await db.collection(col.name).get();
+      for (const doc of existingSnap.docs) {
+        await doc.ref.delete();
+      }
+
+      for (const item of col.data) {
+        if (!item || item.id == null) continue;
+        const docId = String(item.id);
+        const docData = { ...item };
+        delete docData.id;
+        await db.collection(col.name).doc(docId).set(docData, { merge: false });
+      }
+
+      console.log(`✅ Replaced ${col.data.length} items in ${col.name}`);
+    }
+
+    console.log("✅ Imported backup fully restored to Firestore!");
+  } catch (error) {
+    console.error("❌ Error replacing Firestore data:", error.message);
+  }
+}
+
 // Initialize Firestore integration after Firebase is ready
 async function initFirestoreLayer() {
   await waitForFirebase();
@@ -391,6 +444,7 @@ initFirestoreLayer().catch(err => console.error("Error initializing Firestore la
 
 // Make it accessible from console for manual trigger
 window.syncAllDataToFirestore = syncAllDataToFirestore;
+window.replaceAllDataInFirestore = replaceAllDataInFirestore;
 console.log("💡 To sync current data to Firestore, run: window.syncAllDataToFirestore()");
 
 // Export Firestore CRUD helpers

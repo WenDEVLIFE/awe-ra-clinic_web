@@ -2537,12 +2537,23 @@ function exportAllData(){
   a.download = `awera-backup-${todayStr()}.json`;
   a.click();
 }
-function importData(ev){
+async function importData(ev){
   const f = ev.target.files[0];
   if(!f) return;
   const r = new FileReader();
-  r.onload = e=>{
-    try { DB = JSON.parse(e.target.result); window.DB = DB; saveData(); alert('Data imported'); location.reload(); }
+  r.onload = async e=>{
+    try {
+      DB = JSON.parse(e.target.result);
+      window.DB = DB;
+      saveData();
+      if(window.useFirebase && window.useFirebase() && window.replaceAllDataInFirestore){
+        await window.replaceAllDataInFirestore(DB);
+      } else if(window.useFirebase && window.useFirebase() && window.syncAllDataToFirestore){
+        await window.syncAllDataToFirestore();
+      }
+      alert('Data imported and saved');
+      location.reload();
+    }
     catch(err){ alert('Invalid file'); }
   };
   r.readAsText(f);
