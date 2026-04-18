@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Awe-RA Aesthetic & Wellness Clinic — Management System</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<!-- SVG LOGO DEFINITION (reused in header + login) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <!-- Awe-Ra brand mark: gold laurel wreath + serif monogram, stylized profile silhouette -->
+    <symbol id="awe-ra-logo" viewBox="0 0 100 100">
+      <!-- Outer subtle circle -->
+      <circle cx="50" cy="50" r="48" fill="none" stroke="#b38b3e" stroke-width="0.6" opacity="0.5"/>
+      <!-- Left laurel branch -->
+      <g fill="#b38b3e" stroke="#8a6928" stroke-width="0.3">
+        <path d="M 15 50 Q 13 40 18 32 Q 20 40 22 45 Q 19 47 15 50 Z"/>
+        <path d="M 18 42 Q 14 36 16 28 Q 20 33 22 38 Q 20 40 18 42 Z"/>
+        <path d="M 14 56 Q 11 50 14 42 Q 18 48 20 52 Q 17 54 14 56 Z"/>
+        <path d="M 17 64 Q 12 58 13 50 Q 18 55 21 59 Q 19 62 17 64 Z"/>
+        <path d="M 22 72 Q 16 66 16 58 Q 21 63 25 66 Q 24 69 22 72 Z"/>
+        <path d="M 28 78 Q 22 74 20 66 Q 26 69 30 72 Q 29 75 28 78 Z"/>
+      </g>
+      <!-- Right laurel branch (mirrored) -->
+      <g fill="#b38b3e" stroke="#8a6928" stroke-width="0.3">
+        <path d="M 85 50 Q 87 40 82 32 Q 80 40 78 45 Q 81 47 85 50 Z"/>
+        <path d="M 82 42 Q 86 36 84 28 Q 80 33 78 38 Q 80 40 82 42 Z"/>
+        <path d="M 86 56 Q 89 50 86 42 Q 82 48 80 52 Q 83 54 86 56 Z"/>
+        <path d="M 83 64 Q 88 58 87 50 Q 82 55 79 59 Q 81 62 83 64 Z"/>
+        <path d="M 78 72 Q 84 66 84 58 Q 79 63 75 66 Q 76 69 78 72 Z"/>
+        <path d="M 72 78 Q 78 74 80 66 Q 74 69 70 72 Q 71 75 72 78 Z"/>
+      </g>
+      <!-- Top laurel accent leaves -->
+      <g fill="#d4af5e" stroke="#8a6928" stroke-width="0.3">
+        <path d="M 36 82 Q 42 78 46 80 Q 42 84 36 82 Z"/>
+        <path d="M 64 82 Q 58 78 54 80 Q 58 84 64 82 Z"/>
+      </g>
+      <!-- Woman profile silhouette (stylized) inside wreath -->
+      <g fill="#8a6928">
+        <path d="M 42 28
+                 Q 44 22 50 22
+                 Q 57 22 58 29
+                 Q 58 33 56 36
+                 Q 57 38 57 41
+                 Q 56 45 54 47
+                 Q 54 50 55 52
+                 L 59 54
+                 Q 62 56 61 60
+                 L 61 66
+                 L 39 66
+                 L 39 60
+                 Q 38 56 41 54
+                 L 45 52
+                 Q 46 50 46 47
+                 Q 44 45 43 41
+                 Q 43 37 44 34
+                 Q 41 30 42 28 Z"/>
+      </g>
+      <!-- Hair highlight -->
+      <path d="M 42 28 Q 44 22 50 22 Q 57 22 58 29 Q 54 24 50 24 Q 45 24 42 28 Z" fill="#6b5020"/>
+    </symbol>
+  </defs>
+</svg>
+
+<!-- LOGIN OVERLAY -->
+<div id="login-overlay">
+  <div class="login-card">
+    <div class="logo-circle">
+      <svg><use href="#awe-ra-logo"/></svg>
+    </div>
+    <h2>Awe-Ra</h2>
+    <div class="tag">Aesthetic &amp; Wellness Clinic</div>
+    <div class="tag-italic">The Art and Science of Subtle Perfection</div>
+    <div class="form-row">
+      <label>Username</label>
+      <input type="text" id="login-user" placeholder="admin / receptionist / therapist" value="admin"/>
+    </div>
+    <div class="form-row">
+      <label>Password</label>
+      <input type="password" id="login-pass" placeholder="demo" value="demo"/>
+    </div>
+    <div class="form-row">
+      <label>Branch</label>
+      <select id="login-branch">
+        <option value="gerona">Gerona, Tarlac (Main)</option>
+        <option value="paniqui">Paniqui, Tarlac</option>
+      </select>
+    </div>
+    <button class="btn" onclick="doLogin()">Sign In</button>
+    <div class="hint">
+      Demo credentials: <b>admin/demo</b>, <b>reception/demo</b>, <b>therapist/demo</b><br>
+      Role determines which features are available.
+    </div>
+  </div>
+</div>
+
+<!-- HEADER -->
+<header>
+  <div class="brand">
+    <div class="brand-mark">
+      <svg><use href="#awe-ra-logo"/></svg>
+    </div>
+    <div>
+      <h1>Awe-Ra</h1>
+      <small>Aesthetic &amp; Wellness Clinic</small>
+    </div>
+  </div>
+  <div class="top-controls">
+    <select id="branch-selector" onchange="switchBranch(this.value)">
+      <option value="gerona">📍 Gerona, Tarlac</option>
+      <option value="paniqui">📍 Paniqui, Tarlac</option>
+    </select>
+    <span class="user-pill" id="user-pill">admin</span>
+    <button onclick="doLogout()">Logout</button>
+  </div>
+</header>
+
+<!-- NAV -->
+<nav>
+  <button class="active" data-page="dashboard" onclick="showPage('dashboard',this)">Dashboard</button>
+  <button data-page="upcoming" onclick="showPage('upcoming',this)">Upcoming <span id="nav-upcoming-badge" class="pill bad" style="display:none;margin-left:4px">0</span></button>
+  <button data-page="clients" onclick="showPage('clients',this)">Clients</button>
+  <button data-page="schedule" onclick="showPage('schedule',this)">Scheduling</button>
+  <button data-page="inventory" onclick="showPage('inventory',this)">Inventory</button>
+  <button data-page="packages" onclick="showPage('packages',this)">Packages</button>
+  <button data-page="sales" onclick="showPage('sales',this)">Sales</button>
+  <button data-page="settings" onclick="showPage('settings',this)">Settings</button>
+</nav>
+
+<main>
+  <!-- DASHBOARD -->
+  <section class="page active" id="page-dashboard">
+    <h2>Dashboard</h2>
+    <p class="page-sub">Overview of <span id="dash-branch-name">Gerona</span> branch, today</p>
+
+    <div class="grid grid-stats">
+      <div class="stat"><div class="label">Total Clients</div><div class="value" id="stat-clients">0</div></div>
+      <div class="stat"><div class="label">Today's Appointments</div><div class="value" id="stat-today">0</div></div>
+      <div class="stat"><div class="label">Upcoming (7 days)</div><div class="value" id="stat-upcoming">0</div></div>
+      <div class="stat"><div class="label">Low Stock Items</div><div class="value" id="stat-lowstock">0</div></div>
+      <div class="stat"><div class="label">Active Packages</div><div class="value" id="stat-packages">0</div></div>
+      <div class="stat"><div class="label">Outstanding Balance</div><div class="value" id="stat-balance">₱0</div></div>
+    </div>
+
+    <div id="low-stock-alert"></div>
+
+    <h3 style="margin-top:20px">Today's Schedule</h3>
+    <div id="today-schedule"></div>
+  </section>
+
+  <!-- UPCOMING -->
+  <section class="page" id="page-upcoming">
+    <h2>Upcoming & Follow-ups — <span id="up-branch-name">Gerona</span></h2>
+    <p class="page-sub">Clients to contact before tomorrow. Confirm via call or message, then book the appointment on the calendar.</p>
+
+    <h3 style="margin-top:20px">⏰ Tomorrow's Confirmed Appointments</h3>
+    <div id="tomorrow-appts"></div>
+
+    <h3 style="margin-top:24px">📞 Pending Follow-ups (call today)</h3>
+    <p class="page-sub" style="margin-top:0">Package clients whose next session is due, but no appointment is booked yet. Newly availed packages appear automatically so the first session can be scheduled.</p>
+    <div id="pending-followups"></div>
+  </section>
+
+  <!-- CLIENTS -->
+  <section class="page" id="page-clients">
+    <h2>Client Records</h2>
+    <p class="page-sub">Client profiles are shared across all branches nationwide.</p>
+    <div class="toolbar">
+      <input type="search" id="client-search" placeholder="Search name, phone, email..." oninput="renderClients()"/>
+      <button class="btn" onclick="openClientModal()">+ New Client</button>
+    </div>
+    <div id="clients-table"></div>
+  </section>
+
+  <!-- SCHEDULE -->
+  <section class="page" id="page-schedule">
+    <h2>Appointment Scheduling</h2>
+    <p class="page-sub">Showing appointments for <span id="sched-branch-name">Gerona</span> branch</p>
+    <div class="toolbar">
+      <button class="btn secondary" onclick="changeMonth(-1)">‹ Prev</button>
+      <button class="btn secondary" onclick="goToday()">Today</button>
+      <button class="btn secondary" onclick="changeMonth(1)">Next ›</button>
+      <strong id="cal-title" style="margin:0 10px"></strong>
+      <button class="btn" onclick="openApptModal()">+ New Appointment</button>
+    </div>
+    <div id="calendar"></div>
+
+    <h3 style="margin-top:24px">Upcoming Appointments</h3>
+    <div id="appt-list"></div>
+  </section>
+
+  <!-- INVENTORY -->
+  <section class="page" id="page-inventory">
+    <h2>Inventory — <span id="inv-branch-name">Gerona</span></h2>
+    <p class="page-sub">Each branch has its own stock. Switch branches from the top-right selector.</p>
+    <div class="toolbar">
+      <input type="search" id="inv-search" placeholder="Search item..." oninput="renderInventory()"/>
+      <button class="btn" onclick="openInvModal()">+ New Item</button>
+      <button class="btn secondary" onclick="openTransferModal()">↔ Transfer Stock</button>
+    </div>
+    <div id="inv-table"></div>
+  </section>
+
+  <!-- PACKAGES -->
+  <section class="page" id="page-packages">
+    <h2>Service Packages — <span id="pkg-branch-name">Gerona</span></h2>
+    <p class="page-sub">Track clients who availed multi-session service packages — sessions used/paid, downpayment, balance, and running payments. Performing a session auto-deducts any inventory supplies linked to the service.</p>
+    <div class="toolbar">
+      <input type="search" id="pkg-search" placeholder="Search client or package..." oninput="renderPackages()"/>
+      <select id="pkg-filter" onchange="renderPackages()">
+        <option value="all">All statuses</option>
+        <option value="Active" selected>Active only</option>
+        <option value="Completed">Completed</option>
+        <option value="Cancelled">Cancelled</option>
+      </select>
+      <button class="btn" onclick="openPkgModal()">+ New Package</button>
+    </div>
+    <div id="pkg-list"></div>
+  </section>
+
+  <!-- SALES & EXPENSES -->
+  <section class="page" id="page-sales">
+    <h2>Daily Sales &amp; Expenses — <span id="sales-branch-name">Gerona</span></h2>
+    <p class="page-sub">Every payment logged for a package or a paid product purchase appears here. Add the day's operating expenses to compute net profit.</p>
+
+    <div class="toolbar">
+      <label style="font-size:12px;color:var(--blue);font-weight:600">Date:
+        <input type="date" id="sales-date" onchange="renderSales()" style="margin-left:6px"/>
+      </label>
+      <label style="font-size:12px;color:var(--blue);font-weight:600">Branch:
+        <select id="sales-branch-filter" onchange="renderSales()" style="margin-left:6px">
+          <option value="current">Current branch</option>
+          <option value="all">All branches</option>
+        </select>
+      </label>
+      <button class="btn secondary" onclick="goSalesToday()">Today</button>
+      <button class="btn secondary" onclick="shiftSalesDate(-1)">◀ Prev day</button>
+      <button class="btn secondary" onclick="shiftSalesDate(1)">Next day ▶</button>
+    </div>
+
+    <!-- Summary cards -->
+    <div class="grid grid-stats" id="sales-summary"></div>
+
+    <!-- Payments list -->
+    <h3 style="margin-top:20px">Payments Received</h3>
+    <div id="sales-payments"></div>
+
+    <!-- Expenses list -->
+    <h3 style="margin-top:24px;display:flex;justify-content:space-between;align-items:center">
+      Daily Expenses
+      <button class="btn small" onclick="openExpenseModal()">+ Add Expense</button>
+    </h3>
+    <div id="sales-expenses"></div>
+
+    <!-- Net profit block -->
+    <div id="sales-net" style="margin-top:18px"></div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section class="page" id="page-settings">
+    <h2>Settings</h2>
+    <p class="page-sub">Branches, users, and data management</p>
+
+    <h3>Branches</h3>
+    <div id="branches-list"></div>
+
+    <h3 style="margin-top:24px">Services Catalog</h3>
+    <p class="page-sub" style="margin-top:0">Master list of services offered. Each can be linked to inventory supplies (e.g. Glutathione Drip uses 1 vial Gluta + 1 vial Vit-C + 1 IV Set + 1 Saline) — those supplies are auto-deducted every time a session is performed. Changing the price here does NOT affect clients whose package is already locked (downpayment paid).</p>
+    <div class="toolbar">
+      <button class="btn" onclick="openTreatmentModal()">+ New Service</button>
+    </div>
+    <div id="treatments-list"></div>
+
+    <h3 style="margin-top:24px">Data Management</h3>
+    <div class="toolbar">
+      <button class="btn secondary" onclick="exportAllData()">⬇ Export All Data (JSON)</button>
+      <button class="btn secondary" onclick="document.getElementById('import-file').click()">⬆ Import Data</button>
+      <input type="file" id="import-file" accept=".json" style="display:none" onchange="importData(event)"/>
+      <button class="btn danger" onclick="resetAllData()">🗑 Reset Demo Data</button>
+    </div>
+
+    <h3 style="margin-top:24px">About This System</h3>
+    <div class="panel" style="font-size:13px;line-height:1.6">
+      <p><b>Awe-RA Clinic Management System — Prototype v1.0</b></p>
+      <p>This is a <b>working prototype</b> that runs entirely in your browser. All data is currently stored locally on this computer (browser storage). To make it accessible from any computer nationwide, please read the <b>Deployment Guide</b> document that was delivered alongside this file.</p>
+      <p><b>Features included:</b> client records (shared across branches), appointment scheduling (per-branch calendar), inventory management (per-branch stock), multi-branch support, user roles (admin/reception/therapist), data export/import.</p>
+      <p><b>Next steps to go nationwide:</b> host on cloud (Firebase / Supabase recommended), add real authentication, enable real-time sync between branches.</p>
+    </div>
+  </section>
+</main>
+
+<!-- Modals -->
+<div class="modal-backdrop" id="client-modal">
+  <div class="modal">
+    <header><h3 id="client-modal-title">New Client</h3><button class="close-x" onclick="closeModal('client-modal')">×</button></header>
+    <div class="body">
+      <input type="hidden" id="client-id"/>
+      <div class="form-grid">
+        <div class="form-row"><label>First Name *</label><input type="text" id="c-fname"/></div>
+        <div class="form-row"><label>Last Name *</label><input type="text" id="c-lname"/></div>
+        <div class="form-row"><label>Phone</label><input type="text" id="c-phone"/></div>
+        <div class="form-row"><label>Email</label><input type="email" id="c-email"/></div>
+        <div class="form-row"><label>Birthdate</label><input type="date" id="c-bday"/></div>
+        <div class="form-row"><label>Gender</label><select id="c-gender"><option>Female</option><option>Male</option><option>Prefer not to say</option></select></div>
+      </div>
+      <div class="form-row"><label>Address</label><input type="text" id="c-address"/></div>
+      <div class="form-row"><label>Home Branch</label><select id="c-branch"></select></div>
+      <div class="form-grid">
+        <div class="form-row">
+          <label>Skin Specialist (who assisted)</label>
+          <input type="text" id="c-specialist" list="specialist-options" placeholder="e.g. Dr. Reyes"/>
+        </div>
+        <div class="form-row">
+          <label>Facialist (who performed treatment)</label>
+          <input type="text" id="c-facialist" list="facialist-options" placeholder="e.g. Ana Cruz"/>
+        </div>
+      </div>
+      <!-- Autocomplete suggestions populated from existing clients -->
+      <datalist id="specialist-options"></datalist>
+      <datalist id="facialist-options"></datalist>
+      <div class="form-row"><label>Medical / Skin Notes</label><textarea id="c-medical" placeholder="Allergies, medications, skin conditions, previous treatments..."></textarea></div>
+      <div class="form-row"><label>General Notes</label><textarea id="c-notes"></textarea></div>
+    </div>
+    <div class="footer">
+      <button class="btn secondary" onclick="closeModal('client-modal')">Cancel</button>
+      <button class="btn" onclick="saveClient()">Save Client</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="appt-modal">
+  <div class="modal">
+    <header><h3 id="appt-modal-title">New Appointment</h3><button class="close-x" onclick="closeModal('appt-modal')">×</button></header>
+    <div class="body">
+      <input type="hidden" id="appt-id"/>
+      <div class="form-row"><label>Client *</label><select id="a-client"></select></div>
+      <div class="form-grid">
+        <div class="form-row"><label>Date *</label><input type="date" id="a-date"/></div>
+        <div class="form-row"><label>Time *</label><input type="time" id="a-time"/></div>
+        <div class="form-row"><label>Duration (min)</label><input type="number" id="a-duration" value="60" min="15" step="15"/></div>
+        <div class="form-row"><label>Branch</label><select id="a-branch"></select></div>
+      </div>
+      <div class="form-row"><label>Service / Treatment</label><input type="text" id="a-service" placeholder="e.g., Facial, Diamond Peel, Body Massage"/></div>
+      <div class="form-row"><label>Therapist / Staff</label><input type="text" id="a-therapist"/></div>
+      <div class="form-row"><label>Linked Package (optional)</label>
+        <select id="a-package"><option value="">— none —</option></select>
+        <small style="color:var(--muted);font-size:11px;margin-top:2px">If linked and status is set to "Completed", a session will automatically be logged against the package.</small>
+      </div>
+      <div class="form-row"><label>Status</label>
+        <select id="a-status"><option>Booked</option><option>Confirmed</option><option>Completed</option><option>No-show</option><option>Cancelled</option></select>
+      </div>
+      <div class="form-row"><label>Notes</label><textarea id="a-notes"></textarea></div>
+    </div>
+    <div class="footer">
+      <button class="btn danger" id="appt-delete-btn" onclick="deleteAppt()" style="margin-right:auto;display:none">Delete</button>
+      <button class="btn secondary" onclick="closeModal('appt-modal')">Cancel</button>
+      <button class="btn" onclick="saveAppt()">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="inv-modal">
+  <div class="modal">
+    <header><h3 id="inv-modal-title">New Inventory Item</h3><button class="close-x" onclick="closeModal('inv-modal')">×</button></header>
+    <div class="body">
+      <input type="hidden" id="inv-id"/>
+      <div class="form-row"><label>Item Name *</label><input type="text" id="i-name" placeholder="e.g., Glutathione Vial, Facial Mask"/></div>
+      <div class="form-grid">
+        <div class="form-row"><label>Category</label>
+          <select id="i-category"><option>Product</option><option>Supply</option><option>Equipment</option><option>Retail</option></select>
+        </div>
+        <div class="form-row"><label>Unit</label><input type="text" id="i-unit" placeholder="pc / box / bottle"/></div>
+        <div class="form-row"><label>Quantity on Hand</label><input type="number" id="i-qty" value="0" min="0"/></div>
+        <div class="form-row"><label>Reorder Level</label><input type="number" id="i-reorder" value="5" min="0"/></div>
+        <div class="form-row"><label>Unit Cost (₱)</label><input type="number" id="i-cost" value="0" step="0.01"/></div>
+        <div class="form-row"><label>Retail Price (₱)</label><input type="number" id="i-price" value="0" step="0.01"/></div>
+      </div>
+      <div class="form-row"><label>Supplier</label><input type="text" id="i-supplier"/></div>
+      <div class="form-row"><label>Notes</label><textarea id="i-notes"></textarea></div>
+    </div>
+    <div class="footer">
+      <button class="btn danger" id="inv-delete-btn" onclick="deleteInv()" style="margin-right:auto;display:none">Delete</button>
+      <button class="btn secondary" onclick="closeModal('inv-modal')">Cancel</button>
+      <button class="btn" onclick="saveInv()">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="transfer-modal">
+  <div class="modal">
+    <header><h3>Transfer Stock Between Branches</h3><button class="close-x" onclick="closeModal('transfer-modal')">×</button></header>
+    <div class="body">
+      <div class="form-row"><label>Item</label><select id="t-item"></select></div>
+      <div class="form-grid">
+        <div class="form-row"><label>From Branch</label><select id="t-from"></select></div>
+        <div class="form-row"><label>To Branch</label><select id="t-to"></select></div>
+      </div>
+      <div class="form-row"><label>Quantity</label><input type="number" id="t-qty" value="1" min="1"/></div>
+    </div>
+    <div class="footer">
+      <button class="btn secondary" onclick="closeModal('transfer-modal')">Cancel</button>
+      <button class="btn" onclick="doTransfer()">Transfer</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="treatment-modal">
+  <div class="modal" style="max-width:680px">
+    <header><h3 id="treatment-modal-title">New Service</h3><button class="close-x" onclick="closeModal('treatment-modal')">×</button></header>
+    <div class="body">
+      <input type="hidden" id="treatment-id"/>
+      <div class="form-row"><label>Service Name *</label><input type="text" id="tr-name" placeholder="e.g., Classic Facial, Diamond Peel, Glutathione Drip"/></div>
+      <div class="form-grid">
+        <div class="form-row"><label>Category</label>
+          <select id="tr-category"><option>Facial</option><option>Laser</option><option>IV Therapy</option><option>Wellness</option><option>Body</option><option>Injectable</option><option>Other</option></select>
+        </div>
+        <div class="form-row"><label>Status</label>
+          <select id="tr-active"><option value="true">Active</option><option value="false">Archived</option></select>
+        </div>
+        <div class="form-row"><label>Default # Sessions</label><input type="number" id="tr-sessions" value="6" min="1"/></div>
+        <div class="form-row"><label>Recommended Gap (days)</label><input type="number" id="tr-days" value="14" min="1"/></div>
+        <div class="form-row"><label>Price per Session (₱) *</label><input type="number" id="tr-price" value="0" step="0.01" min="0"/></div>
+        <div class="form-row"><label>&nbsp;</label><div style="font-size:12px;color:var(--muted);padding-top:6px">Price can be changed anytime. It won't affect clients whose package is already locked.</div></div>
+      </div>
+      <div class="form-row"><label>Description</label><textarea id="tr-desc"></textarea></div>
+
+      <div style="border-top:1px solid var(--border);margin:14px 0 8px;padding-top:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <label style="font-size:12px;color:var(--blue);font-weight:700;text-transform:uppercase;letter-spacing:.5px">Inventory Supplies Used per Session</label>
+          <button type="button" class="btn small secondary" onclick="addSupplyRow()">+ Add Supply</button>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:8px;font-style:italic">
+          Every time this service is performed (manual session log or Completed appointment), each listed item will be auto-deducted from the branch's inventory. Use item names that match existing inventory records.
+        </div>
+        <div id="tr-supplies-list"></div>
+      </div>
+    </div>
+    <div class="footer">
+      <button class="btn danger" id="tr-delete-btn" onclick="deleteTreatment()" style="margin-right:auto;display:none">Delete</button>
+      <button class="btn secondary" onclick="closeModal('treatment-modal')">Cancel</button>
+      <button class="btn" onclick="saveTreatment()">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="pkg-modal">
+  <div class="modal">
+    <header><h3 id="pkg-modal-title">New Package</h3><button class="close-x" onclick="closeModal('pkg-modal')">×</button></header>
+    <div class="body">
+      <input type="hidden" id="pkg-id"/>
+      <div class="form-row"><label>Client *</label><select id="p-client"></select></div>
+      <div class="form-row"><label>Service *</label>
+        <select id="p-treatment" onchange="onTreatmentPicked()"></select>
+        <small style="color:var(--muted);font-size:11px;margin-top:2px">Picking a service fills in default sessions, price, and the recommended gap between sessions.</small>
+      </div>
+      <div id="p-locked-note" style="display:none;background:var(--gold-soft);color:var(--gold-dark);padding:8px 10px;border-radius:6px;font-size:12px;margin-bottom:10px;border-left:3px solid var(--gold)">
+        🔒 Price locked — this client has already paid a downpayment. Treatment-catalog price changes will not affect this package. Balance is still editable.
+      </div>
+      <div class="form-grid">
+        <div class="form-row"><label>Total Sessions *</label><input type="number" id="p-total" value="6" min="1" oninput="onSessionsEdited()"/></div>
+        <div class="form-row">
+          <label>Sessions Paid (auto)</label>
+          <input type="text" id="p-paid" value="0" readonly style="background:var(--blue-ghost);font-weight:600;color:var(--gold-dark)"/>
+          <small style="color:var(--muted);font-size:11px;margin-top:2px">Auto-computed from total payments ÷ price per session. Free packages are auto-maxed.</small>
+        </div>
+        <div class="form-row"><label>Price per Session (₱)</label><input type="number" id="p-pps" value="0" step="0.01" min="0" oninput="onPpsEdited()"/></div>
+        <div class="form-row">
+          <label>Total Package Price (₱) <span id="p-price-hint" style="font-size:11px;color:var(--muted);font-weight:400;font-style:italic">— editable for discounts</span></label>
+          <input type="number" id="p-price" value="0" step="0.01" min="0" oninput="onTotalPriceEdited()"/>
+        </div>
+        <div class="form-row"><label>Downpayment (₱)</label><input type="number" id="p-down" value="0" step="0.01" min="0" oninput="updatePaidPreview()"/></div>
+        <div class="form-row"><label>Recommended Gap (days)</label><input type="number" id="p-gap" value="14" min="1"/></div>
+        <div class="form-row"><label>Date Started</label><input type="date" id="p-start"/></div>
+        <div class="form-row"><label>Status</label>
+          <select id="p-status"><option>Active</option><option>Completed</option><option>Cancelled</option></select>
+        </div>
+        <div class="form-row"><label>Branch</label><input type="text" id="p-branch" readonly style="background:var(--blue-ghost)"/></div>
+      </div>
+      <div id="p-discount-badge" style="display:none;background:var(--gold-soft);border-left:3px solid var(--gold);padding:8px 10px;border-radius:6px;font-size:12px;color:var(--gold-dark);margin-bottom:10px"></div>
+      <div class="form-row"><label>Notes</label><textarea id="p-notes" placeholder="Promo, therapist of choice, special requirements..."></textarea></div>
+      <div style="background:var(--blue-ghost);border:1px solid var(--border-blue);padding:10px;border-radius:6px;font-size:12px;color:var(--blue);margin-top:8px">
+        The downpayment is automatically recorded as the first payment, and the price is then locked against future treatment catalog changes. The client will also appear in tomorrow's follow-up list for first-session scheduling.
+      </div>
+    </div>
+    <div class="footer">
+      <button class="btn danger" id="pkg-delete-btn" onclick="deletePkg()" style="margin-right:auto;display:none">Delete</button>
+      <button class="btn secondary" onclick="closeModal('pkg-modal')">Cancel</button>
+      <button class="btn" onclick="savePkg()">Save Package</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="pkg-view-modal">
+  <div class="modal" style="max-width:720px">
+    <header><h3 id="pkg-view-title">Package Details</h3><button class="close-x" onclick="closeModal('pkg-view-modal')">×</button></header>
+    <div class="body" id="pkg-view-body"></div>
+    <div class="footer">
+      <button class="btn secondary" onclick="closeModal('pkg-view-modal')">Close</button>
+      <button class="btn" id="pkg-edit-btn" onclick="editCurrentPkg()">Edit Package</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="session-modal">
+  <div class="modal">
+    <header><h3>Log a Session</h3><button class="close-x" onclick="closeModal('session-modal')">×</button></header>
+    <div class="body">
+      <input type="hidden" id="s-pkg-id"/>
+      <div class="form-grid">
+        <div class="form-row"><label>Date</label><input type="date" id="s-date"/></div>
+        <div class="form-row"><label>Time</label><input type="time" id="s-time"/></div>
+      </div>
+      <div class="form-row"><label>Therapist / Staff</label><input type="text" id="s-therapist"/></div>
+      <div class="form-row"><label>Notes</label><textarea id="s-notes" placeholder="Observations, reactions, next steps..."></textarea></div>
+    </div>
+    <div class="footer">
+      <button class="btn secondary" onclick="closeModal('session-modal')">Cancel</button>
+      <button class="btn" onclick="saveSession()">Log Session</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="payment-modal">
+  <div class="modal">
+    <header><h3>Add Payment</h3><button class="close-x" onclick="closeModal('payment-modal')">×</button></header>
+    <div class="body">
+      <input type="hidden" id="pay-pkg-id"/>
+      <div class="form-grid">
+        <div class="form-row"><label>Date</label><input type="date" id="pay-date"/></div>
+        <div class="form-row"><label>Amount (₱) *</label><input type="number" id="pay-amount" step="0.01" min="0" oninput="recalcPaySurcharge()"/></div>
+        <div class="form-row"><label>Type</label>
+          <select id="pay-type">
+            <option>Downpayment</option>
+            <option>Session Payment</option>
+            <option>Additional</option>
+            <option>Final Balance</option>
+          </select>
+        </div>
+        <div class="form-row"><label>Mode of Payment *</label>
+          <select id="pay-method" onchange="recalcPaySurcharge()">
+            <option>Cash</option>
+            <option>GCash</option>
+            <option>Bank Transfer</option>
+            <option>Debit / Credit Card</option>
+            <option>Other</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Card surcharge block — only shown when method = Card -->
+      <div id="pay-card-block" style="display:none;background:var(--gold-soft);border:1px solid var(--gold-light);border-left:3px solid var(--gold);border-radius:6px;padding:10px 12px;margin:6px 0 12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <div>
+            <div style="font-size:12px;color:var(--gold-dark);font-weight:600;letter-spacing:.3px">Card Surcharge (4%)</div>
+            <div id="pay-surcharge-calc" style="font-size:13px;color:var(--ink);margin-top:2px">—</div>
+          </div>
+          <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;color:var(--blue)">
+            <input type="checkbox" id="pay-waive" onchange="recalcPaySurcharge()" style="width:16px;height:16px"/>
+            Waive the 4% surcharge
+          </label>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:6px;font-style:italic">
+          Surcharge covers the bank's swipe fee. When waived, the clinic absorbs it.
+        </div>
+      </div>
+
+      <div class="form-row"><label>Reference / Receipt #</label><input type="text" id="pay-ref"/></div>
+      <div class="form-row"><label>Notes</label><textarea id="pay-notes"></textarea></div>
+    </div>
+    <div class="footer">
+      <button class="btn secondary" onclick="closeModal('payment-modal')">Cancel</button>
+      <button class="btn" onclick="savePayment()">Record Payment</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="client-view-modal">
+  <div class="modal" style="max-width:760px">
+    <header><h3>Client Profile</h3><button class="close-x" onclick="closeModal('client-view-modal')">×</button></header>
+    <div class="body" id="client-view-body"></div>
+    <div class="footer">
+      <button class="btn secondary" onclick="closeModal('client-view-modal')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- PURCHASE MODAL (product purchases tied to inventory) -->
+<div class="modal-backdrop" id="purchase-modal">
+  <div class="modal">
+    <header><h3 id="purchase-modal-title">Add Product Purchase</h3><button class="close-x" onclick="closeModal('purchase-modal')">×</button></header>
+    <div class="body">
+      <input type="hidden" id="pur-id"/>
+      <input type="hidden" id="pur-client-id"/>
+      <div class="form-row"><label>Product (from inventory) *</label>
+        <select id="pur-item" onchange="onPurchaseItemPicked()"></select>
+        <small style="color:var(--muted);font-size:11px;margin-top:2px">Only items stocked at the current branch are listed. Qty will be deducted from inventory when saved.</small>
+      </div>
+      <div class="form-grid">
+        <div class="form-row"><label>Quantity *</label><input type="number" id="pur-qty" value="1" min="1" step="1" oninput="recalcPurchaseTotal()"/></div>
+        <div class="form-row"><label>Unit Price (₱)</label><input type="number" id="pur-unit" value="0" step="0.01" min="0" oninput="recalcPurchaseTotal()"/></div>
+        <div class="form-row"><label>Total (₱)</label><input type="text" id="pur-total" readonly style="background:var(--blue-ghost);font-weight:600;color:var(--gold-dark)"/></div>
+        <div class="form-row"><label>Date</label><input type="date" id="pur-date"/></div>
+      </div>
+      <div class="form-row" style="flex-direction:row;align-items:center;gap:8px">
+        <input type="checkbox" id="pur-paid" onchange="recalcPurchaseSurcharge()" style="width:18px;height:18px;margin:0"/>
+        <label for="pur-paid" style="margin:0">Paid in full</label>
+        <span style="color:var(--muted);font-size:11px;margin-left:8px">(uncheck if client hasn't paid yet — it adds to outstanding balance)</span>
+      </div>
+      <div class="form-grid">
+        <div class="form-row"><label>Mode of Payment</label>
+          <select id="pur-method" onchange="recalcPurchaseSurcharge()">
+            <option>Cash</option>
+            <option>GCash</option>
+            <option>Bank Transfer</option>
+            <option>Debit / Credit Card</option>
+            <option>Other</option>
+          </select>
+        </div>
+        <div class="form-row"><label>Reference / Receipt #</label><input type="text" id="pur-ref" placeholder="optional"/></div>
+      </div>
+
+      <div id="pur-card-block" style="display:none;background:var(--gold-soft);border:1px solid var(--gold-light);border-left:3px solid var(--gold);border-radius:6px;padding:10px 12px;margin:0 0 10px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <div>
+            <div style="font-size:12px;color:var(--gold-dark);font-weight:600;letter-spacing:.3px">Card Surcharge (4%)</div>
+            <div id="pur-surcharge-calc" style="font-size:13px;color:var(--ink);margin-top:2px">—</div>
+          </div>
+          <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;color:var(--blue)">
+            <input type="checkbox" id="pur-waive" onchange="recalcPurchaseSurcharge()" style="width:16px;height:16px"/>
+            Waive the 4% surcharge
+          </label>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:6px;font-style:italic">
+          Only applied when payment mode is card AND the purchase is marked Paid.
+        </div>
+      </div>
+
+      <div class="form-row"><label>Notes</label><textarea id="pur-notes" placeholder="Optional — e.g., take-home skincare, sold during session #3..."></textarea></div>
+      <div id="pur-stock-note" style="font-size:12px;color:var(--muted);margin-top:6px"></div>
+    </div>
+    <div class="footer">
+      <button class="btn secondary" onclick="closeModal('purchase-modal')">Cancel</button>
+      <button class="btn" onclick="savePurchase()">Save Purchase</button>
+    </div>
+  </div>
+</div>
+
+<!-- EXPENSE MODAL -->
+<div class="modal-backdrop" id="expense-modal">
+  <div class="modal">
+    <header><h3 id="expense-modal-title">Add Expense</h3><button class="close-x" onclick="closeModal('expense-modal')">×</button></header>
+    <div class="body">
+      <input type="hidden" id="exp-id"/>
+      <div class="form-grid">
+        <div class="form-row"><label>Date *</label><input type="date" id="exp-date"/></div>
+        <div class="form-row"><label>Branch *</label><select id="exp-branch"></select></div>
+        <div class="form-row"><label>Category *</label>
+          <select id="exp-category">
+            <option>Utilities</option>
+            <option>Rent</option>
+            <option>Salaries / Allowances</option>
+            <option>Supplies (non-inventory)</option>
+            <option>Marketing / Ads</option>
+            <option>Repairs / Maintenance</option>
+            <option>Transportation</option>
+            <option>Food / Meals</option>
+            <option>Bank / Card Fees</option>
+            <option>Government / Permits</option>
+            <option>Miscellaneous</option>
+          </select>
+        </div>
+        <div class="form-row"><label>Amount (₱) *</label><input type="number" id="exp-amount" step="0.01" min="0" value="0"/></div>
+      </div>
+      <div class="form-row"><label>Notes</label><textarea id="exp-notes" placeholder="Optional — e.g., Meralco April 2026 bill, courier fee..."></textarea></div>
+    </div>
+    <div class="footer">
+      <button class="btn secondary" onclick="closeModal('expense-modal')">Cancel</button>
+      <button class="btn" onclick="saveExpense()">Save Expense</button>
+    </div>
+  </div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
+
