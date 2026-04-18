@@ -161,7 +161,23 @@ function loadData(){
     return d;
   } catch(e){ return JSON.parse(JSON.stringify(defaultData)); }
 }
-function saveData(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(DB)); }
+function saveData(){
+  // Always save to localStorage
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(DB));
+  
+  // Also sync to Firestore if available
+  if (window.useFirebase && window.useFirebase()) {
+    syncToFirestore();
+  }
+}
+
+async function syncToFirestore() {
+  if (!window.FirestoreCRUD) return;
+  // This function is called after major CRUD operations
+  // Individual items are synced in their respective save functions
+  console.log("🔄 Syncing data to Firestore...");
+}
+
 function nextId(kind){ DB.counters[kind] = (DB.counters[kind]||0)+1; return DB.counters[kind]; }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
 function fmtDate(s){ if(!s) return ''; const d=new Date(s+'T00:00'); return d.toLocaleDateString('en-US',{year:'numeric',month:'short',day:'numeric'}); }
@@ -173,23 +189,63 @@ let currentPage = 'dashboard';
 let calDate = new Date();
 
 // -------- Auth --------
-function doLogin(){
-  const u = document.getElementById('login-user').value.trim();
-  const p = document.getElementById('login-pass').value;
-  const b = document.getElementById('login-branch').value;
-  const user = DB.users.find(x=>x.username===u && x.password===p);
-  if(!user){ alert('Invalid credentials. Try admin/demo'); return; }
-  DB.session = {user, branch:b};
-  saveData();
-  document.getElementById('login-overlay').style.display='none';
-  document.getElementById('branch-selector').value = b;
-  document.getElementById('user-pill').textContent = user.name + ' (' + user.role + ')';
-  refreshAll();
+async function doLogin(){
+  const email = document.getElementById('login-user').value.trim();
+  const password = document.getElementById('login-pass').value;
+  const branch = document.getElementById('login-branch').value;
+  
+  if(!email || !password){ alert('Email and password are required'); return; }
+  
+  try {
+    // Try Firebase Auth first
+    if(window.DataLayer) {
+      const result = await window.DataLayer.loginWithEmail(email, password);
+      if(result.success) {
+        // Firebase login successful
+        const firebaseUser = result.user;
+        DB.session = {
+          user: {
+            email: firebaseUser.email,
+            uid: firebaseUser.uid,
+            name: firebaseUser.displayName || firebaseUser.email.split('@')[0],
+            role: 'user' // Default role, can be fetched from Firestore user profile
+          },
+          branch: branch
+        };
+        saveData();
+        document.getElementById('login-overlay').style.display='none';
+        document.getElementById('branch-selector').value = branch;
+        document.getElementById('user-pill').textContent = DB.session.user.name + ' (' + DB.session.user.role + ')';
+        console.log("✅ Login successful via Firebase:", firebaseUser.email);
+        refreshAll();
+        return;
+      } else {
+        alert('Login failed: ' + (result.error || 'Invalid credentials'));
+        return;
+      }
+    }
+  } catch(error) {
+    console.error("Login error:", error);
+    alert('Login error: ' + error.message);
+  }
 }
-function doLogout(){
-  DB.session.user = null;
-  saveData();
-  location.reload();
+
+async function doLogout(){
+  try {
+    // Logout from Firebase
+    if(window.DataLayer) {
+      const result = await window.DataLayer.logout();
+      if(result.success) {
+        console.log("✅ Logout successful");
+      }
+    }
+    DB.session.user = null;
+    saveData();
+    location.reload();
+  } catch(error) {
+    console.error("Logout error:", error);
+    location.reload();
+  }
 }
 function switchBranch(b){
   DB.session.branch = b;
@@ -334,10 +390,18 @@ function saveClient(){
   if(id){
     const idx = DB.clients.findIndex(x=>x.id==id);
     DB.clients[idx] = {...DB.clients[idx], ...rec};
+    // Sync to Firestore if available
+    if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
+      window.FirestoreCRUD.update('clients', id, rec).catch(err => console.error("Firestore update error:", err));
+    }
   } else {
     rec.id = nextId('client');
     rec.created = Date.now();
     DB.clients.push(rec);
+    // Sync to Firestore if available
+    if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
+      window.FirestoreCRUD.add('clients', rec).catch(err => console.error("Firestore add error:", err));
+    }
   }
   saveData();
   closeModal('client-modal');
@@ -346,6 +410,10 @@ function saveClient(){
 function deleteClient(id){
   if(!confirm('Delete this client? Their appointments will remain but show "Unknown client".')) return;
   DB.clients = DB.clients.filter(x=>x.id!==id);
+  // Sync to Firestore if available
+  if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
+    window.FirestoreCRUD.delete('clients', id).catch(err => console.error("Firestore delete error:", err));
+  }
   saveData();
   renderClients();
 }
@@ -580,12 +648,20 @@ function savePurchase(){
       applyStockChange(old.branch, [{itemName:old.itemName, qty:old.qty}], -1);
       warnings = applyStockChange(rec.branch, [{itemName:rec.itemName, qty:rec.qty}], +1);
       DB.purchases[idx] = {...old, ...rec};
+      // Sync to Firestore if available
+      if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
+        window.FirestoreCRUD.update('purchases', String(id), DB.purchases[idx]).catch(err => console.error("Firestore update error:", err));
+      }
     }
   } else {
     rec.id = nextId('purchase');
     DB.purchases = DB.purchases||[];
     DB.purchases.push(rec);
     warnings = applyStockChange(rec.branch, [{itemName:rec.itemName, qty:rec.qty}], +1);
+    // Sync to Firestore if available
+    if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
+      window.FirestoreCRUD.add('purchases', rec).catch(err => console.error("Firestore add error:", err));
+    }
   }
   saveData();
   closeModal('purchase-modal');
@@ -601,6 +677,10 @@ function removePurchase(id){
   const p = DB.purchases[idx];
   applyStockChange(p.branch, [{itemName:p.itemName, qty:p.qty}], -1);
   DB.purchases.splice(idx,1);
+  // Sync to Firestore if available
+  if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
+    window.FirestoreCRUD.delete('purchases', String(id)).catch(err => console.error("Firestore delete error:", err));
+  }
   saveData();
   if(currentClientViewId) viewClient(currentClientViewId);
   renderInventory && renderInventory();
@@ -610,6 +690,10 @@ function togglePurchasePaid(id){
   const p = (DB.purchases||[]).find(x=>x.id===id);
   if(!p) return;
   p.paid = !p.paid;
+  // Sync to Firestore if available
+  if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
+    window.FirestoreCRUD.update('purchases', String(id), p).catch(err => console.error("Firestore update error:", err));
+  }
   saveData();
   if(currentClientViewId) viewClient(currentClientViewId);
   renderDashboard();
@@ -849,11 +933,19 @@ function saveExpense(){
   if(id){
     const idx = (DB.expenses||[]).findIndex(x=>x.id===id);
     if(idx>=0) DB.expenses[idx] = {...DB.expenses[idx], ...rec};
+    // Sync to Firestore if available
+    if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
+      window.FirestoreCRUD.update('expenses', String(id), rec).catch(err => console.error("Firestore update error:", err));
+    }
   } else {
     rec.id = nextId('expense');
     rec.createdAt = new Date().toISOString();
     DB.expenses = DB.expenses || [];
     DB.expenses.push(rec);
+    // Sync to Firestore if available
+    if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
+      window.FirestoreCRUD.add('expenses', rec).catch(err => console.error("Firestore add error:", err));
+    }
   }
   saveData();
   closeModal('expense-modal');
@@ -862,6 +954,10 @@ function saveExpense(){
 function deleteExpense(id){
   if(!confirm('Delete this expense entry? This cannot be undone.')) return;
   DB.expenses = (DB.expenses||[]).filter(x=>x.id!==id);
+  // Sync to Firestore if available
+  if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
+    window.FirestoreCRUD.delete('expenses', String(id)).catch(err => console.error("Firestore delete error:", err));
+  }
   saveData();
   renderSales();
 }
@@ -983,10 +1079,18 @@ function saveAppt(){
     apptId = +id;
     const idx = DB.appointments.findIndex(x=>x.id==id);
     DB.appointments[idx] = {...DB.appointments[idx], ...rec};
+    // Sync to Firestore if available
+    if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
+      window.FirestoreCRUD.update('appointments', String(apptId), rec).catch(err => console.error("Firestore update error:", err));
+    }
   } else {
     apptId = nextId('appt');
     rec.id = apptId;
     DB.appointments.push(rec);
+    // Sync to Firestore if available
+    if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
+      window.FirestoreCRUD.add('appointments', rec).catch(err => console.error("Firestore add error:", err));
+    }
   }
   // Package auto-link: if completed + has package, ensure a session entry exists
   syncApptToPackage(apptId);
@@ -1056,6 +1160,10 @@ function deleteAppt(){
     });
   });
   DB.appointments = DB.appointments.filter(x=>x.id!==id);
+  // Sync to Firestore if available
+  if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
+    window.FirestoreCRUD.delete('appointments', String(id)).catch(err => console.error("Firestore delete error:", err));
+  }
   saveData();
   closeModal('appt-modal');
   renderSchedule();
@@ -1160,9 +1268,17 @@ function saveInv(){
   if(id){
     const idx = DB.inventory.findIndex(x=>x.id==id);
     DB.inventory[idx] = {...DB.inventory[idx], ...rec};
+    // Sync to Firestore if available
+    if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
+      window.FirestoreCRUD.update('inventory', id, rec).catch(err => console.error("Firestore update error:", err));
+    }
   } else {
     rec.id = nextId('inv');
     DB.inventory.push(rec);
+    // Sync to Firestore if available
+    if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
+      window.FirestoreCRUD.add('inventory', rec).catch(err => console.error("Firestore add error:", err));
+    }
   }
   saveData();
   closeModal('inv-modal');
@@ -1173,6 +1289,10 @@ function deleteInv(){
   const id = +document.getElementById('inv-id').value;
   if(!confirm('Delete this item?')) return;
   DB.inventory = DB.inventory.filter(x=>x.id!==id);
+  // Sync to Firestore if available
+  if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
+    window.FirestoreCRUD.delete('inventory', String(id)).catch(err => console.error("Firestore delete error:", err));
+  }
   saveData();
   closeModal('inv-modal');
   renderInventory();
@@ -1202,6 +1322,16 @@ function doTransfer(){
   if(dest){ dest.qty += qty; }
   else {
     DB.inventory.push({...src, id:nextId('inv'), branch:to, qty});
+  }
+  // Sync to Firestore if available
+  if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
+    window.FirestoreCRUD.update('inventory', String(src.id), src).catch(err => console.error("Firestore update error:", err));
+    if(dest && DB.inventory.find(x=>x.id===dest.id)){
+      window.FirestoreCRUD.update('inventory', String(dest.id), dest).catch(err => console.error("Firestore update error:", err));
+    } else if(dest && !DB.inventory.find(x=>x.id===dest.id)) {
+      const newDest = DB.inventory.find(x=>x.branch===to && x.name===src.name);
+      if(newDest) window.FirestoreCRUD.add('inventory', newDest).catch(err => console.error("Firestore add error:", err));
+    }
   }
   saveData();
   closeModal('transfer-modal');
@@ -1330,9 +1460,17 @@ function saveTreatment(){
   if(id){
     const idx = DB.treatments.findIndex(x=>x.id==id);
     DB.treatments[idx] = {...DB.treatments[idx], ...rec};
+    // Sync to Firestore if available
+    if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
+      window.FirestoreCRUD.update('treatments', String(id), rec).catch(err => console.error("Firestore update error:", err));
+    }
   } else {
     rec.id = nextId('treatment');
     DB.treatments.push(rec);
+    // Sync to Firestore if available
+    if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
+      window.FirestoreCRUD.add('treatments', rec).catch(err => console.error("Firestore add error:", err));
+    }
   }
   saveData();
   closeModal('treatment-modal');
@@ -1348,6 +1486,10 @@ function deleteTreatment(){
   }
   if(!confirm('Delete this service?')) return;
   DB.treatments = DB.treatments.filter(x=>x.id!==id);
+  // Sync to Firestore if available
+  if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
+    window.FirestoreCRUD.delete('treatments', String(id)).catch(err => console.error("Firestore delete error:", err));
+  }
   saveData();
   closeModal('treatment-modal');
   renderTreatments();
@@ -1699,6 +1841,10 @@ function savePkg(){
     DB.packages[idx] = {...DB.packages[idx], ...rec};
     // Auto-recompute sessionsPaid based on existing payments + current price
     refreshPkgSessionsPaid(DB.packages[idx]);
+    // Sync to Firestore if available
+    if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
+      window.FirestoreCRUD.update('packages', String(id), rec).catch(err => console.error("Firestore update error:", err));
+    }
   } else {
     rec.id = nextId('pkg');
     rec.sessions = [];
@@ -1720,6 +1866,10 @@ function savePkg(){
     // Compute initial sessionsPaid (from downpayment / pps, or maxed for free)
     refreshPkgSessionsPaid(rec);
     DB.packages.push(rec);
+    // Sync to Firestore if available
+    if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
+      window.FirestoreCRUD.add('packages', rec).catch(err => console.error("Firestore add error:", err));
+    }
   }
   saveData();
   closeModal('pkg-modal');
@@ -1733,6 +1883,10 @@ function deletePkg(){
   const id = +document.getElementById('pkg-id').value;
   if(!confirm('Delete this package? All session and payment records for it will be lost.')) return;
   DB.packages = DB.packages.filter(x=>x.id!==id);
+  // Sync to Firestore if available
+  if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
+    window.FirestoreCRUD.delete('packages', String(id)).catch(err => console.error("Firestore delete error:", err));
+  }
   saveData();
   closeModal('pkg-modal');
   renderPackages();
@@ -1860,6 +2014,10 @@ function removeSession(pkgId, sessionId){
   }
   p.sessions = (p.sessions||[]).filter(s=>s.id!==sessionId);
   if(p.status==='Completed' && p.sessions.length<p.totalSessions) p.status='Active';
+  // Sync to Firestore if available
+  if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
+    window.FirestoreCRUD.update('packages', String(pkgId), p).catch(err => console.error("Firestore update error:", err));
+  }
   saveData();
   viewPkg(pkgId);
   renderPackages();
@@ -1934,6 +2092,10 @@ function savePayment(){
   p.priceLocked = true;
   // Re-derive sessions paid so it reflects the new total payments
   refreshPkgSessionsPaid(p);
+  // Sync to Firestore if available
+  if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
+    window.FirestoreCRUD.update('packages', String(pkgId), p).catch(err => console.error("Firestore update error:", err));
+  }
   saveData();
   closeModal('payment-modal');
   renderPackages();
@@ -1948,6 +2110,10 @@ function removePayment(pkgId, payId){
   p.payments = (p.payments||[]).filter(x=>x.id!==payId);
   // Re-derive sessions paid so it reflects the reduced total payments
   refreshPkgSessionsPaid(p);
+  // Sync to Firestore if available
+  if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
+    window.FirestoreCRUD.update('packages', String(pkgId), p).catch(err => console.error("Firestore update error:", err));
+  }
   saveData();
   viewPkg(pkgId);
   renderPackages();
@@ -2173,7 +2339,47 @@ function refreshAll(){
 }
 
 // -------- Boot --------
+// Firebase Auth state listener - restore session if user already logged in
+window.onFirebaseReady = function(firebaseUser) {
+  if(firebaseUser) {
+    console.log("🔐 Restoring Firebase session for:", firebaseUser.email);
+    // Session already exists in DB, just hide login overlay
+    if(DB.session && DB.session.user) {
+      document.getElementById('login-overlay').style.display='none';
+      refreshAll();
+      return;
+    }
+    // If no session in localStorage but Firebase user exists, create one
+    DB.session = {
+      user: {
+        email: firebaseUser.email,
+        uid: firebaseUser.uid,
+        name: firebaseUser.displayName || firebaseUser.email.split('@')[0],
+        role: 'user'
+      },
+      branch: DB.session?.branch || 'gerona'
+    };
+    saveData();
+    document.getElementById('login-overlay').style.display='none';
+    document.getElementById('branch-selector').value = DB.session.branch;
+    document.getElementById('user-pill').textContent = DB.session.user.name + ' (' + DB.session.user.role + ')';
+    console.log("✅ Session restored from Firebase auth");
+    refreshAll();
+  }
+};
+
 window.addEventListener('DOMContentLoaded', ()=>{
+  // Check if Firebase has initialized with a user
+  if(window.isFirebaseReady && window.isFirebaseReady()) {
+    const firebaseUser = window.getCurrentFirebaseUser ? window.getCurrentFirebaseUser() : null;
+    if(firebaseUser && typeof window.onFirebaseReady === 'function') {
+      console.log("🔐 Firebase user found on load, restoring session...");
+      window.onFirebaseReady(firebaseUser);
+      return;
+    }
+  }
+  
+  // Check localStorage for existing session (non-Firebase fallback)
   if(DB.session && DB.session.user){
     document.getElementById('login-overlay').style.display='none';
     document.getElementById('branch-selector').value = DB.session.branch;

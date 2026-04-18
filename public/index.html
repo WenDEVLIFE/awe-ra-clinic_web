@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>Awe-RA Aesthetic & Wellness Clinic — Management System</title>
 <link rel="stylesheet" href="styles.css" />
+<!-- Firebase -->
+<script src="https://www.gstatic.com/firebasejs/12.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.12.0/firebase-firestore-compat.js"></script>
 </head>
 <body>
 
@@ -75,12 +79,12 @@
     <div class="tag">Aesthetic &amp; Wellness Clinic</div>
     <div class="tag-italic">The Art and Science of Subtle Perfection</div>
     <div class="form-row">
-      <label>Username</label>
-      <input type="text" id="login-user" placeholder="admin / receptionist / therapist" value="admin"/>
+      <label>Email</label>
+      <input type="email" id="login-user" placeholder="admin@awe-ra.clinic" value=""/>
     </div>
     <div class="form-row">
       <label>Password</label>
-      <input type="password" id="login-pass" placeholder="demo" value="demo"/>
+      <input type="password" id="login-pass" placeholder="Enter your password" value=""/>
     </div>
     <div class="form-row">
       <label>Branch</label>
@@ -649,6 +653,8 @@
 </div>
 
 <!-- EXPENSE MODAL -->
+<div id="firebase-status" style="position:fixed;bottom:10px;right:10px;padding:8px 12px;background:#2f4858;color:#fff;border-radius:4px;font-size:11px;z-index:50;display:none">Firebase: Initializing...</div>
+
 <div class="modal-backdrop" id="expense-modal">
   <div class="modal">
     <header><h3 id="expense-modal-title">Add Expense</h3><button class="close-x" onclick="closeModal('expense-modal')">×</button></header>
@@ -683,6 +689,8 @@
   </div>
 </div>
 
+<script src="firebase-config.js"></script>
+<script src="firestore-layer.js"></script>
 <script src="script.js"></script>
 </body>
 </html>
