@@ -4,11 +4,17 @@
 
 console.log("⏳ Initializing Firestore data layer...");
 
-// Debounce timer for UI updates (avoid too many re-renders)
+// Debounce timer for UI updates (avoid too many re-renders).
+// 200ms is enough to batch a burst of rapid snapshots without making the user
+// feel latency. 500ms compounded visibly on top of Firestore's own round-trip.
 let dashboardRefreshTimer = null;
 function scheduleUIUpdate() {
   if (dashboardRefreshTimer) clearTimeout(dashboardRefreshTimer);
   dashboardRefreshTimer = setTimeout(() => {
+    // Scrub any duplicate ids / coerce numeric-string ids BEFORE rendering.
+    // This is what makes "Edit" on a service open the right record after a
+    // concurrent insert from another device. Lives in the patched script.js.
+    if (window.normalizeDB) window.normalizeDB();
     if (window.refreshLoginBranchOptions) window.refreshLoginBranchOptions();
     // Update ALL pages
     if (window.renderDashboard) window.renderDashboard();
@@ -21,7 +27,7 @@ function scheduleUIUpdate() {
     if (window.renderSales) window.renderSales();
     if (window.updateUpcomingBadge) window.updateUpcomingBadge();
     console.log("🔄 UI updated from Firestore data");
-  }, 500); // Wait 500ms for multiple changes to batch
+  }, 200);
 }
 
 // Wait for Firebase to be ready
@@ -147,10 +153,64 @@ async function replaceAllDataInFirestore(sourceDB) {
   }
 }
 
+// One-time migration for records written by the old buggy FirestoreCRUD.add().
+// The old add() let Firestore auto-generate a random doc id like "abcdef123"
+// while the record's own `id` field was a number like 101. Result: every
+// subsequent update/delete against id 101 missed the actual doc and silently
+// failed. This scanner moves any such doc to its correct path (`collection/101`),
+// deduplicating when both the orphan and the correct doc happen to exist.
+async function _migrateBadAutoIdDocs(db) {
+  const collections = [
+    'clients','appointments','inventory','packages','treatments',
+    'expenses','purchases','payments','sessions'
+  ];
+  let totalMoved = 0;
+  for (const name of collections) {
+    try {
+      const snap = await db.collection(name).get();
+      for (const doc of snap.docs) {
+        const data = doc.data();
+        if (data == null || data.id == null) continue;
+        const wantedId = String(data.id);
+        if (wantedId === doc.id) continue; // already correct
+        const targetRef = db.collection(name).doc(wantedId);
+        const targetSnap = await targetRef.get();
+        if (!targetSnap.exists) {
+          // No conflict — move the orphan to its rightful id.
+          await targetRef.set(data, { merge: false });
+          await doc.ref.delete();
+          console.log(`🔧 migrated ${name}/${doc.id} → ${name}/${wantedId}`);
+        } else {
+          // Both the orphan and the correct doc exist. Pick the newer one by
+          // updatedAt / createdAt, keep it at the correct path, delete the other.
+          const targetData = targetSnap.data();
+          const orphanTs = _tsOf(data);
+          const targetTs = _tsOf(targetData);
+          if (orphanTs > targetTs) {
+            await targetRef.set(data, { merge: false });
+          }
+          await doc.ref.delete();
+          console.log(`🔧 deduped ${name}/${doc.id} (kept ${name}/${wantedId})`);
+        }
+        totalMoved++;
+      }
+    } catch (err) {
+      console.warn(`⚠️  Migration skipped for ${name}:`, err.message);
+    }
+  }
+  if (totalMoved) console.log(`🔧 _migrateBadAutoIdDocs: fixed ${totalMoved} doc(s)`);
+  return totalMoved;
+}
+function _tsOf(d) {
+  // Best-effort: prefer updatedAt, then createdAt, then 0.
+  const t = d?.updatedAt?.toMillis?.() ?? d?.updatedAt ?? d?.createdAt?.toMillis?.() ?? d?.createdAt ?? 0;
+  return typeof t === 'number' ? t : (t instanceof Date ? t.getTime() : 0);
+}
+
 // Initialize Firestore integration after Firebase is ready
 async function initFirestoreLayer() {
   await waitForFirebase();
-  
+
   if (!window.useFirebase || !window.useFirebase()) {
     console.log("📌 Using localStorage (Firebase not available)");
     return;
@@ -159,6 +219,14 @@ async function initFirestoreLayer() {
   console.log("🔄 Setting up Firestore real-time listeners...");
 
   const db = firebase.firestore();
+
+  // Run the one-time migration BEFORE setting up listeners so the first
+  // snapshot each listener sees is already clean.
+  try {
+    await _migrateBadAutoIdDocs(db);
+  } catch (err) {
+    console.warn("⚠️  Bad-doc-id migration errored (continuing):", err.message);
+  }
   
   // Initial data load - fetch all collections once on startup
   console.log("📥 Loading initial data from Firestore...");
@@ -450,19 +518,36 @@ console.log("💡 To sync current data to Firestore, run: window.syncAllDataToFi
 // Export Firestore CRUD helpers
 window.FirestoreCRUD = {
   // Add document
+  //
+  // IMPORTANT: if the caller supplies `data.id` we MUST use it as the Firestore
+  // document id. The original code called db.collection(c).add(data) which
+  // makes Firestore auto-generate a random doc id. That meant a record written
+  // locally with id 101 ended up at `clients/abcdef123` on Firestore, and every
+  // subsequent `.update('clients', '101', ...)` or `.delete('clients', '101')`
+  // routed to `clients/101` — a doc that did not exist — so the write silently
+  // failed. Symptoms: "deleted data comes back", "edits don't propagate",
+  // "1 minute delay" (user retrying until a write happened to succeed).
   async add(collection, data) {
     try {
       if (!window.useFirebase || !window.useFirebase()) {
         throw new Error("Firebase not available");
       }
       const db = firebase.firestore();
-      const docRef = await db.collection(collection).add({
+      // If caller provided an id, use it; otherwise let Firestore generate one
+      // and echo it back into the stored document's `id` field so every
+      // downstream read has a stable identifier.
+      const docId = (data && data.id != null && data.id !== '')
+        ? String(data.id)
+        : db.collection(collection).doc().id;
+      const docData = {
         ...data,
+        id: (data && data.id != null && data.id !== '') ? data.id : docId,
         createdAt: new Date(),
         createdBy: firebase.auth().currentUser?.uid || 'system'
-      });
-      console.log(`✅ Added to ${collection}:`, docRef.id);
-      return { success: true, id: docRef.id };
+      };
+      await db.collection(collection).doc(docId).set(docData, { merge: false });
+      console.log(`✅ Added to ${collection}:`, docId);
+      return { success: true, id: docId };
     } catch (error) {
       console.warn(`⚠️  Firestore add failed (${collection}):`, error.message);
       return { success: false, error: error.message };
