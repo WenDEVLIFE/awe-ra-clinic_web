@@ -140,7 +140,7 @@ function loadData(){
     // Backfill: each package should have daysBetween and priceLocked
     d.packages.forEach(p=>{
       if(p.daysBetween==null){
-        const t = d.treatments.find(x=>x.id===p.treatmentId);
+        const t = d.treatments.find(x => String(x.id) === String(p.treatmentId));
         p.daysBetween = t ? t.daysBetween : 14;
       }
       if(p.priceLocked==null){
@@ -192,7 +192,58 @@ function forceRefreshAllUI() {
   console.log("✅ All UI refreshed");
 }
 
-function nextId(kind){ DB.counters[kind] = (DB.counters[kind]||0)+1; return DB.counters[kind]; }
+function nextId(kind){
+  // Bump the counter past any existing id in the matching collection so two
+  // devices creating records at the same moment can't produce the same id.
+  // Without this, a fresh browser that just hydrated from Firestore will start
+  // at DB.counters[kind]=100 and immediately collide with every seeded id.
+  const coll = ({
+    client:'clients', appt:'appointments', inv:'inventory', pkg:'packages',
+    session:null, payment:null, treatment:'treatments',
+    purchase:'purchases', expense:'expenses'
+  })[kind];
+  if(coll && Array.isArray(DB[coll])){
+    let max = DB.counters[kind] || 0;
+    for(const rec of DB[coll]){
+      if(!rec || rec.id==null) continue;
+      const n = Number(rec.id);
+      if(Number.isFinite(n) && n > max) max = n;
+    }
+    DB.counters[kind] = max;
+  }
+  DB.counters[kind] = (DB.counters[kind]||0)+1;
+  return DB.counters[kind];
+}
+
+// --- Dedup + normalize DB collections ---
+// Safe to call any time (e.g. after a Firestore snapshot replaces an array).
+// Deduplicates by String(id): if the same logical id was created on two devices
+// concurrently, we keep the last-written copy. Also coerces any numeric-string
+// id back to a number for stable comparisons elsewhere.
+function _dedupById(arr){
+  if(!Array.isArray(arr)) return [];
+  const byId = new Map();
+  const noId = [];
+  for(const item of arr){
+    if(!item || typeof item !== 'object') continue;
+    if(item.id == null){ noId.push(item); continue; }
+    const asNum = Number(item.id);
+    if(Number.isFinite(asNum) && String(asNum) === String(item.id)){
+      item.id = asNum;
+    }
+    byId.set(String(item.id), item);
+  }
+  return [...byId.values(), ...noId];
+}
+function normalizeDB(){
+  if(!DB) return;
+  ['clients','appointments','inventory','treatments','packages','purchases','expenses'].forEach(k=>{
+    if(Array.isArray(DB[k])) DB[k] = _dedupById(DB[k]);
+  });
+}
+// Expose so firestore-layer.js can call this right after it rebuilds DB from
+// an onSnapshot event, before any rendering happens.
+window.normalizeDB = normalizeDB;
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
 function fmtDate(s){ if(!s) return ''; const d=new Date(s+'T00:00'); return d.toLocaleDateString('en-US',{year:'numeric',month:'short',day:'numeric'}); }
 function fmtTime(t){ if(!t) return ''; const [h,m]=t.split(':'); const hh=((+h+11)%12)+1; const ap=+h>=12?'PM':'AM'; return `${hh}:${m} ${ap}`; }
@@ -1502,9 +1553,20 @@ function renderTreatments(){
 }
 
 function openTreatmentModal(id){
-  document.getElementById('tr-delete-btn').style.display = id ? 'inline-block' : 'none';
-  if(id){
-    const t = DB.treatments.find(x=>x.id===id);
+  const hasId = (id!=null && id!=='');
+  document.getElementById('tr-delete-btn').style.display = hasId ? 'inline-block' : 'none';
+  if(hasId){
+    // String-coerce both sides: Firestore ids arrive as strings, localStorage ids
+    // as numbers. Strict === would find either (a) nothing, or (b) a stale
+    // duplicate and open the wrong service.
+    const t = DB.treatments.find(x => String(x.id) === String(id));
+    if(!t){
+      // Likely edited/deleted on another device between render and click.
+      alert('This service could not be found — it may have just been deleted or renamed on another device. The list will refresh.');
+      closeModal('treatment-modal');
+      renderTreatments();
+      return;
+    }
     document.getElementById('treatment-modal-title').textContent = 'Edit Service';
     document.getElementById('treatment-id').value = t.id;
     document.getElementById('tr-name').value = t.name;
@@ -1592,11 +1654,20 @@ function saveTreatment(){
     if(!confirm(`These supply item names don't match any current inventory item:\n\n• ${unknown.join('\n• ')}\n\nSave anyway? (You can still add the matching inventory items later — stock just won't be deducted until then.)`)) return;
   }
   if(id){
-    const idx = DB.treatments.findIndex(x=>x.id==id);
-    DB.treatments[idx] = {...DB.treatments[idx], ...rec};
+    const idx = DB.treatments.findIndex(x => String(x.id) === String(id));
+    if(idx < 0){
+      alert('This service no longer exists (probably deleted on another device). The list will refresh.');
+      closeModal('treatment-modal');
+      renderTreatments();
+      return;
+    }
+    // Preserve the original id explicitly so we never accidentally rewrite it
+    // from the form value (which is a DOM string) and create a duplicate row.
+    const originalId = DB.treatments[idx].id;
+    DB.treatments[idx] = {...DB.treatments[idx], ...rec, id: originalId};
     // Sync to Firestore if available
     if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
-      window.FirestoreCRUD.update('treatments', String(id), rec).catch(err => console.error("Firestore update error:", err));
+      window.FirestoreCRUD.update('treatments', String(originalId), rec).catch(err => console.error("Firestore update error:", err));
     }
   } else {
     rec.id = nextId('treatment');
@@ -1612,14 +1683,19 @@ function saveTreatment(){
 }
 
 function deleteTreatment(){
-  const id = +document.getElementById('treatment-id').value;
-  const inUse = DB.packages.some(p=>p.treatmentId===id);
+  // Keep id as the DOM string. Coercing with +value silently produces NaN if
+  // the id was a Firestore string like "abc123", and then the filter below
+  // either deletes nothing (when id is a string) or deletes the wrong record
+  // (when both sides happen to coerce to the same number).
+  const id = document.getElementById('treatment-id').value;
+  if(id===''){ return; }
+  const inUse = DB.packages.some(p => String(p.treatmentId) === String(id));
   if(inUse){
     alert('This service is referenced by existing package(s). Archive it instead (set status to Archived).');
     return;
   }
   if(!confirm('Delete this service?')) return;
-  DB.treatments = DB.treatments.filter(x=>x.id!==id);
+  DB.treatments = DB.treatments.filter(x => String(x.id) !== String(id));
   // Sync to Firestore if available
   if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
     window.FirestoreCRUD.delete('treatments', String(id)).catch(err => console.error("Firestore delete error:", err));
@@ -1640,8 +1716,12 @@ function onTreatmentPicked(){
   // Only autofill when creating a new package OR not locked
   const editingLocked = document.getElementById('pkg-id').value && document.getElementById('p-locked-note').style.display!=='none';
   if(editingLocked) return;
-  const tid = +document.getElementById('p-treatment').value;
-  const t = DB.treatments.find(x=>x.id===tid);
+  // DOM <select> values are always strings; treatment ids can be numbers or
+  // strings depending on whether they came from seed data or Firestore.
+  // Compare with String() on both sides so either type matches correctly.
+  const tid = document.getElementById('p-treatment').value;
+  if(!tid) return;
+  const t = DB.treatments.find(x => String(x.id) === String(tid));
   if(!t) return;
   document.getElementById('p-total').value = t.defaultSessions;
   document.getElementById('p-pps').value = t.pricePerSession;
