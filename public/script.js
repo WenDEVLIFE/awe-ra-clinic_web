@@ -244,6 +244,35 @@ function normalizeDB(){
 // Expose so firestore-layer.js can call this right after it rebuilds DB from
 // an onSnapshot event, before any rendering happens.
 window.normalizeDB = normalizeDB;
+
+// --- Admin password gate for destructive/sensitive buttons ---
+// Used to protect Branch Add/Edit/Delete and Data Management (Export,
+// Import, Reset) from accidental clicks. This is a *client-side* guard —
+// anyone who opens DevTools can read the password below. It's not a
+// security boundary, it's a "don't let a staff member delete Gerona while
+// reaching for a different button" guard. For real access control we'd
+// need Firestore security rules or a role field on the auth user.
+//
+// The gate remembers a successful unlock for 10 minutes per tab, so the
+// admin isn't re-prompted a dozen times while doing branch setup.
+const ADMIN_PASSWORD = '100825Awera';
+const ADMIN_UNLOCK_MS = 10 * 60 * 1000; // 10 minutes
+let _adminUnlockedUntil = 0;
+function requireAdminPassword(reason){
+  if(Date.now() < _adminUnlockedUntil) return true;
+  const entered = prompt(
+    (reason ? reason + '\n\n' : '') +
+    'This action is password-protected.\nEnter the admin password to continue:'
+  );
+  if(entered == null) return false; // cancelled
+  if(entered !== ADMIN_PASSWORD){
+    alert('Incorrect password.');
+    return false;
+  }
+  _adminUnlockedUntil = Date.now() + ADMIN_UNLOCK_MS;
+  return true;
+}
+
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
 function fmtDate(s){ if(!s) return ''; const d=new Date(s+'T00:00'); return d.toLocaleDateString('en-US',{year:'numeric',month:'short',day:'numeric'}); }
 function fmtTime(t){ if(!t) return ''; const [h,m]=t.split(':'); const hh=((+h+11)%12)+1; const ap=+h>=12?'PM':'AM'; return `${hh}:${m} ${ap}`; }
@@ -1157,7 +1186,7 @@ function renderCalendar(){
       return `<div class="appt" title="${esc(fmtTime(a.time)+' '+(c?c.fname+' '+c.lname:'')+' - '+(a.service||''))}" onclick="event.stopPropagation();openApptModal(${a.id})">${fmtTime(a.time)} ${esc(name)}</div>`;
     }).join('');
     const more = dayAppts.length>3 ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">+${dayAppts.length-3} more</div>` : '';
-    html += `<div class="cal-cell ${ds===today?'today':''}" onclick="openApptModal(null,'${ds}')"><div class="d">${d}</div>${apptHtml}${more}</div>`;
+    html += `<div class="cal-cell ${ds===today?'today':''}" onclick="openDayScheduleModal('${ds}')"><div class="d">${d}</div>${apptHtml}${more}</div>`;
   }
   document.getElementById('calendar').innerHTML = `<div class="cal-grid">${html}</div>`;
 }
@@ -1189,6 +1218,62 @@ function fillPackageSelect(clientId, selectedId){
     const s = pkgStats(p);
     return `<option value="${p.id}" ${selectedId==p.id?'selected':''}>${esc(p.packageName)} (${s.sessionsUsed}/${p.totalSessions} used)</option>`;
   }).join('');
+}
+
+// Track which date the "Day Schedule" modal is currently showing, so the
+// "+ New Appointment" button inside it knows what date to prefill.
+let _dayScheduleDate = null;
+
+// Open a modal listing every appointment on a given date, filtered to the
+// current branch. Clicking a row jumps to that appointment's edit modal.
+// Clicking "+ New Appointment" opens the New Appointment modal prefilled
+// with this date.
+function openDayScheduleModal(ds){
+  _dayScheduleDate = ds;
+  const br = DB.session.branch;
+  const dayAppts = DB.appointments
+    .filter(a => branchMatches(a.branch, br) && a.date === ds)
+    .sort((a,b) => (a.time||'').localeCompare(b.time||''));
+  const title = new Date(ds + 'T00:00').toLocaleDateString('en-US',
+    { weekday:'long', year:'numeric', month:'long', day:'numeric' });
+  document.getElementById('day-schedule-title').textContent = title;
+  const body = document.getElementById('day-schedule-body');
+  if(!dayAppts.length){
+    body.innerHTML = `<div class="empty" style="padding:20px;text-align:center;color:var(--muted)">No appointments scheduled for this day at ${esc(branchName(br))}.</div>`;
+  } else {
+    const rows = dayAppts.map(a => {
+      const c = findClientById(a.clientId);
+      const statusClass = a.status==='Confirmed' ? 'ok'
+                        : a.status==='Completed' ? 'ok'
+                        : (a.status==='Cancelled' || a.status==='No-show') ? 'bad'
+                        : 'info';
+      return `<tr style="cursor:pointer" onclick="closeModal('day-schedule-modal');openApptModal(${a.id})">
+        <td><b>${fmtTime(a.time)}</b></td>
+        <td>${c ? esc(c.fname+' '+c.lname) : '<span style="color:var(--muted)">— unknown —</span>'}</td>
+        <td>${esc(a.service||'')}</td>
+        <td>${esc(a.therapist||'')}</td>
+        <td><span class="pill ${statusClass}">${esc(a.status||'Booked')}</span></td>
+      </tr>`;
+    }).join('');
+    body.innerHTML = `
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
+        ${dayAppts.length} appointment${dayAppts.length===1?'':'s'} at <b>${esc(branchName(br))}</b>. Click a row to edit.
+      </div>
+      <table>
+        <thead><tr><th>Time</th><th>Client</th><th>Service</th><th>Therapist</th><th>Status</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+  openModal('day-schedule-modal');
+}
+
+// Called by the "+ New Appointment" button inside the day-schedule modal.
+// Closes the day modal, then opens the appointment modal prefilled with the
+// date the user had been looking at.
+function addApptFromDayModal(){
+  const ds = _dayScheduleDate || todayStr();
+  closeModal('day-schedule-modal');
+  openApptModal(null, ds);
 }
 
 function openApptModal(id, prefillDate){
@@ -1283,25 +1368,31 @@ function saveAppt(){
 }
 
 function syncApptToPackage(apptId){
-  const a = DB.appointments.find(x=>x.id===apptId);
+  const a = DB.appointments.find(x=>String(x.id)===String(apptId));
   if(!a) return;
   const allWarnings = [];
+  // Track every package we touch so we can push all of them to Firestore at
+  // the end — without this, any auto-created/removed session lives only in
+  // the local DB and the next snapshot wipes it ("session counter resets").
+  const touchedPkgIds = new Set();
   // Remove any previously-auto-created session for this appointment from any package
   // and restore the supplies that were deducted at that time.
   DB.packages.forEach(p=>{
     if(!p.sessions) return;
+    const before = p.sessions.length;
     p.sessions = p.sessions.filter(s=>{
-      if(s.apptId!==apptId) return true;
+      if(String(s.apptId)!==String(apptId)) return true;
       const toRestore = Array.isArray(s.supplies) && s.supplies.length
         ? s.supplies
         : snapshotTreatmentSupplies(p.treatmentId);
       applyStockChange(p.branch, toRestore, -1);
       return false;
     });
+    if(p.sessions.length !== before) touchedPkgIds.add(p.id);
   });
   // If appt is Completed and linked to a package, add a session entry and deduct supplies
   if(a.packageId && a.status==='Completed'){
-    const p = DB.packages.find(x=>x.id===a.packageId);
+    const p = DB.packages.find(x=>String(x.id)===String(a.packageId));
     if(p){
       p.sessions = p.sessions||[];
       const supplies = snapshotTreatmentSupplies(p.treatmentId);
@@ -1317,7 +1408,17 @@ function syncApptToPackage(apptId){
         supplies
       });
       if(p.sessions.length>=p.totalSessions && p.status==='Active') p.status='Completed';
+      touchedPkgIds.add(p.id);
     }
+  }
+  // Persist every mutated package to Firestore. Fire-and-forget — the local
+  // DB is already correct; this just keeps Firestore aligned so other devices
+  // and later snapshots see the same truth.
+  if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD){
+    touchedPkgIds.forEach(pid=>{
+      const pp = DB.packages.find(x=>String(x.id)===String(pid));
+      if(pp) window.FirestoreCRUD.update('packages', String(pp.id), pp).catch(err => console.error("Firestore pkg sync error:", err));
+    });
   }
   if(allWarnings.length){
     setTimeout(()=>alert('Session auto-logged from appointment. Inventory updated.\n\n'+allWarnings.join('\n')), 50);
@@ -2160,7 +2261,10 @@ function viewPkg(id){
 
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
       <h4 style="margin:0">Sessions</h4>
-      <button class="btn small" onclick="openSessionModal(${p.id})">+ Log Session</button>
+      <div style="display:flex;gap:6px">
+        <button class="btn small secondary" onclick="adjustSessionsUsed(${p.id})" title="For packages that started before this system: set the sessions-used count directly.">⚙ Set sessions used</button>
+        <button class="btn small" onclick="openSessionModal(${p.id})">+ Log Session</button>
+      </div>
     </div>
     <table style="margin-bottom:18px"><thead><tr><th>#</th><th>When</th><th>Therapist</th><th>Notes</th><th></th></tr></thead><tbody>${sessionRows}</tbody></table>
 
@@ -2189,8 +2293,9 @@ function openSessionModal(pkgId){
 }
 
 function saveSession(){
-  const pkgId = +document.getElementById('s-pkg-id').value;
-  const p = DB.packages.find(x=>x.id===pkgId);
+  const pkgIdRaw = document.getElementById('s-pkg-id').value;
+  const pkgId = +pkgIdRaw;
+  const p = DB.packages.find(x=>String(x.id)===String(pkgIdRaw));
   if(!p) return;
   const s = pkgStats(p);
   if(s.sessionsUsed >= p.totalSessions){
@@ -2211,6 +2316,14 @@ function saveSession(){
   });
   // Auto-complete package when all sessions used
   if((p.sessions.length>=p.totalSessions) && p.status==='Active'){ p.status='Completed'; }
+  // Sync the mutated package to Firestore. Without this, the next snapshot
+  // (from ANY device's write, or from this package's own listener re-firing)
+  // replaces `p` with the Firestore copy that doesn't know about this new
+  // session — which is why sessionsUsed was visually "resetting to 0
+  // everytime it updates".
+  if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
+    window.FirestoreCRUD.update('packages', String(p.id), p).catch(err => console.error("Firestore update error:", err));
+  }
   saveData();
   closeModal('session-modal');
   renderPackages();
@@ -2218,6 +2331,79 @@ function saveSession(){
   renderDashboard();
   if(document.getElementById('pkg-view-modal').classList.contains('active') || currentPkgId===pkgId){ viewPkg(pkgId); }
   if(warnings.length) alert('Session logged and supplies deducted.\n\n'+warnings.join('\n'));
+}
+
+// Manually set the "sessions used" count for a package. Intended for
+// importing packages that were started on paper/another system — the user
+// just wants to say "this client has already used 5 out of 10," without
+// backfilling individual session records and without touching inventory.
+// Implementation: pad or trim a placeholder list of sessions (tagged
+// {imported:true, supplies:[]} so inventory is NOT deducted) until the
+// total count matches the requested value.
+function adjustSessionsUsed(pkgId){
+  const p = DB.packages.find(x=>String(x.id)===String(pkgId));
+  if(!p){ alert('Package not found.'); return; }
+  p.sessions = p.sessions || [];
+  const current = p.sessions.length;
+  const raw = prompt(
+    `Set sessions used for "${p.packageName}".\n\n` +
+    `Currently: ${current} / ${p.totalSessions}\n\n` +
+    `Enter the new sessions-used count (0–${p.totalSessions}).\n` +
+    `Existing real session records will be preserved; only placeholder\n` +
+    `"imported" entries are added or removed. No inventory is deducted.`,
+    String(current)
+  );
+  if(raw==null) return; // user cancelled
+  const target = Math.max(0, Math.min(+raw, p.totalSessions));
+  if(!Number.isFinite(target)){ alert('Not a valid number.'); return; }
+  if(target === current) return;
+  if(target > current){
+    const toAdd = target - current;
+    for(let i=0;i<toAdd;i++){
+      p.sessions.push({
+        id: nextId('session'),
+        date: todayStr(),
+        time: '',
+        therapist: '',
+        notes: 'Imported (pre-system record)',
+        apptId: null,
+        supplies: [],
+        imported: true
+      });
+    }
+  } else {
+    // Prefer removing imported placeholders first, then fall back to the
+    // most-recent real sessions if the user is really trying to trim.
+    const toRemove = current - target;
+    let removed = 0;
+    // Pass 1: drop imported placeholders from the end
+    for(let i=p.sessions.length-1; i>=0 && removed<toRemove; i--){
+      if(p.sessions[i].imported){ p.sessions.splice(i,1); removed++; }
+    }
+    // Pass 2: if still more to remove, warn and drop real ones from the end
+    if(removed < toRemove){
+      const extra = toRemove - removed;
+      if(!confirm(`Only ${removed} imported placeholder(s) could be removed. To hit ${target}, ${extra} real session record(s) will also be deleted. Continue?`)){
+        // revert the imported-placeholder removals? Easiest: leave as-is; user just said cancel so don't trim further
+        renderPackages();
+        viewPkg(pkgId);
+        return;
+      }
+      for(let i=p.sessions.length-1; i>=0 && removed<toRemove; i--){
+        p.sessions.splice(i,1); removed++;
+      }
+    }
+  }
+  // Status follow-through: if it was Completed and now isn't full, re-open it.
+  if(p.status==='Completed' && p.sessions.length < p.totalSessions) p.status='Active';
+  if(p.status==='Active' && p.sessions.length >= p.totalSessions) p.status='Completed';
+  if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD){
+    window.FirestoreCRUD.update('packages', String(p.id), p).catch(err => console.error("Firestore update error:", err));
+  }
+  saveData();
+  renderPackages();
+  renderDashboard();
+  viewPkg(pkgId);
 }
 
 function removeSession(pkgId, sessionId){
@@ -2485,8 +2671,17 @@ function renderSettings(){
     </td>
   </tr>`).join('');
   document.getElementById('branches-list').innerHTML = `<table><thead><tr><th>Branch</th><th>Address</th><th>Phone</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>`;
+  // Services catalog now lives on its own page (#page-services). We still
+  // render it here defensively so that if anyone lands on Settings while the
+  // services list hasn't been drawn yet, the DOM is populated.
   renderTreatments();
 }
+function renderServices(){
+  // Dedicated page for the Services Catalog. Thin wrapper around
+  // renderTreatments() so showPage('services') has something to call.
+  renderTreatments();
+}
+window.renderServices = renderServices;
 
 function branchSlug(name){
   const base = (name||'').toLowerCase().trim()
@@ -2496,6 +2691,7 @@ function branchSlug(name){
 }
 
 function openBranchModal(id){
+  if(!requireAdminPassword(id ? 'Editing a branch' : 'Adding a new branch')) return;
   if(id){
     const b = DB.branches.find(x=>String(x.id)===String(id));
     if(!b){ alert('Branch not found.'); return; }
@@ -2530,6 +2726,7 @@ function getBranchUsageSummary(branchId){
 }
 
 async function deleteBranch(branchId){
+  if(!requireAdminPassword('Deleting a branch')) return;
   const branch = DB.branches.find(b=>String(b.id)===String(branchId));
   if(!branch){ alert('Branch not found.'); return; }
   if(DB.branches.length <= 1){ alert('You must keep at least one branch.'); return; }
@@ -2611,13 +2808,28 @@ async function saveBranch(){
   renderSettings();
 }
 function exportAllData(){
+  if(!requireAdminPassword('Exporting all clinic data')) return;
   const blob = new Blob([JSON.stringify(DB,null,2)], {type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = `awera-backup-${todayStr()}.json`;
   a.click();
 }
+// Stub invoked by the hidden file input's onchange; actual work lives in
+// `importData` below. This function runs *before* the file picker opens so
+// the password is checked up front. If the user cancels, we never open the
+// file picker.
+function startImportData(){
+  if(!requireAdminPassword('Importing a data backup (this REPLACES current data)')) return;
+  document.getElementById('import-file').click();
+}
 async function importData(ev){
+  // Belt-and-suspenders: if someone fires the hidden <input> directly (e.g.
+  // via DevTools), re-check the password here too. No-op if already unlocked.
+  if(!requireAdminPassword('Importing a data backup (this REPLACES current data)')){
+    ev.target.value = ''; // clear the chosen file so changing again re-triggers
+    return;
+  }
   const f = ev.target.files[0];
   if(!f) return;
   const r = new FileReader();
@@ -2639,6 +2851,7 @@ async function importData(ev){
   r.readAsText(f);
 }
 function resetAllData(){
+  if(!requireAdminPassword('Resetting ALL data back to demo seed')) return;
   if(!confirm('This will delete ALL data and restore the demo seed. Are you sure?')) return;
   localStorage.removeItem(STORAGE_KEY);
   location.reload();
@@ -2717,6 +2930,7 @@ function refreshAll(){
     if(dateEl && !dateEl.value) dateEl.value = todayStr();
     renderSales();
   }
+  if(currentPage==='services') renderServices();
   if(currentPage==='settings') renderSettings();
   updateUpcomingBadge();
 }
