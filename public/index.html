@@ -130,6 +130,7 @@
   <button data-page="schedule" onclick="showPage('schedule',this)">Scheduling</button>
   <button data-page="inventory" onclick="showPage('inventory',this)">Inventory</button>
   <button data-page="packages" onclick="showPage('packages',this)">Packages</button>
+  <button data-page="services" onclick="showPage('services',this)">Services</button>
   <button data-page="sales" onclick="showPage('sales',this)">Sales</button>
   <button data-page="settings" onclick="showPage('settings',this)">Settings</button>
 </nav>
@@ -263,10 +264,20 @@
     <div id="sales-net" style="margin-top:18px"></div>
   </section>
 
+  <!-- SERVICES -->
+  <section class="page" id="page-services">
+    <h2>Services Catalog</h2>
+    <p class="page-sub">Master list of services offered. Each can be linked to inventory supplies (e.g. Glutathione Drip uses 1 vial Gluta + 1 vial Vit-C + 1 IV Set + 1 Saline) — those supplies are auto-deducted every time a session is performed. Changing the price here does NOT affect clients whose package is already locked (downpayment paid).</p>
+    <div class="toolbar">
+      <button class="btn" onclick="openTreatmentModal()">+ New Service</button>
+    </div>
+    <div id="treatments-list"></div>
+  </section>
+
   <!-- SETTINGS -->
   <section class="page" id="page-settings">
     <h2>Settings</h2>
-    <p class="page-sub">Branches, users, and data management</p>
+    <p class="page-sub">Branches and data management</p>
 
     <h3>Branches</h3>
     <div class="toolbar">
@@ -274,17 +285,10 @@
     </div>
     <div id="branches-list"></div>
 
-    <h3 style="margin-top:24px">Services Catalog</h3>
-    <p class="page-sub" style="margin-top:0">Master list of services offered. Each can be linked to inventory supplies (e.g. Glutathione Drip uses 1 vial Gluta + 1 vial Vit-C + 1 IV Set + 1 Saline) — those supplies are auto-deducted every time a session is performed. Changing the price here does NOT affect clients whose package is already locked (downpayment paid).</p>
-    <div class="toolbar">
-      <button class="btn" onclick="openTreatmentModal()">+ New Service</button>
-    </div>
-    <div id="treatments-list"></div>
-
     <h3 style="margin-top:24px">Data Management</h3>
     <div class="toolbar">
       <button class="btn secondary" onclick="exportAllData()">⬇ Export All Data (JSON)</button>
-      <button class="btn secondary" onclick="document.getElementById('import-file').click()">⬆ Import Data</button>
+      <button class="btn secondary" onclick="startImportData()">⬆ Import Data</button>
       <input type="file" id="import-file" accept=".json" style="display:none" onchange="importData(event)"/>
       <button class="btn danger" onclick="resetAllData()">🗑 Reset Demo Data</button>
     </div>
@@ -507,6 +511,22 @@
     <div class="footer">
       <button class="btn secondary" onclick="closeModal('pkg-view-modal')">Close</button>
       <button class="btn" id="pkg-edit-btn" onclick="editCurrentPkg()">Edit Package</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="day-schedule-modal">
+  <div class="modal" style="max-width:720px">
+    <header>
+      <h3 id="day-schedule-title">Schedule for Day</h3>
+      <button class="close-x" onclick="closeModal('day-schedule-modal')">×</button>
+    </header>
+    <div class="body" id="day-schedule-body">
+      <!-- Populated by openDayScheduleModal() -->
+    </div>
+    <div class="footer">
+      <button class="btn secondary" onclick="closeModal('day-schedule-modal')">Close</button>
+      <button class="btn" id="day-schedule-add-btn" onclick="addApptFromDayModal()">+ New Appointment</button>
     </div>
   </div>
 </div>
