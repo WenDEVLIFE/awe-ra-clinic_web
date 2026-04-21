@@ -30,21 +30,36 @@ function scheduleUIUpdate() {
   }, 200);
 }
 
-// Wait for Firebase to be ready
-const MAX_WAIT = 10000; // 10 seconds
+// Wait for Firebase AND an authenticated user to be ready.
+//
+// The old check polled window.isFirebaseReady(), which goes true from a
+// 3-second setTimeout in firebase-config.js even before onAuthStateChanged
+// has fired. On a slow device (e.g. cold MacBook load, bad wifi) that
+// timeout wins the race, initFirestoreLayer then sees useFirebase=false,
+// takes the early-return "📌 Using localStorage" branch, and the real-time
+// listeners are never attached — which is why the MacBook has been needing
+// multiple refreshes before live data shows up.
+//
+// useFirebase() only goes true AFTER a user is actually signed in, so
+// polling it instead guarantees that by the time we resolve, both Firebase
+// *and* the auth session exist. MAX_WAIT is generous (5 minutes) because
+// the legitimate "not ready yet" case is "user hasn't typed their password
+// yet" — we shouldn't fall back to localStorage just because the login
+// screen is sitting there.
+const MAX_WAIT = 300000; // 5 minutes — effectively "until the user logs in"
 let firebaseCheckCount = 0;
 
 async function waitForFirebase() {
   return new Promise((resolve) => {
     const checkInterval = setInterval(() => {
       firebaseCheckCount++;
-      if (window.isFirebaseReady && window.isFirebaseReady()) {
+      if (window.useFirebase && window.useFirebase()) {
         clearInterval(checkInterval);
-        console.log("✅ Firebase is ready!");
+        console.log("✅ Firebase + auth ready!");
         resolve(true);
       } else if (firebaseCheckCount * 100 > MAX_WAIT) {
         clearInterval(checkInterval);
-        console.warn("⚠️  Firebase took too long, proceeding with localStorage fallback");
+        console.warn("⚠️  Firebase/auth took too long, proceeding with localStorage fallback");
         resolve(false);
       }
     }, 100);
@@ -555,18 +570,27 @@ window.FirestoreCRUD = {
   },
 
   // Update document
+  //
+  // IMPORTANT: callers in script.js sometimes pass a numeric docId (e.g. 101)
+  // because the local DB stores numeric ids from the seed data. The Firebase
+  // compat SDK's .doc(<number>) behavior is inconsistent across versions —
+  // it can silently reject, and the caller's .catch() just logs a warning,
+  // so the local array update appears to succeed while Firestore never
+  // receives the write. Force String() coercion here so every call lands on
+  // a real document path regardless of how the caller typed its id.
   async update(collection, docId, data) {
     try {
       if (!window.useFirebase || !window.useFirebase()) {
         throw new Error("Firebase not available");
       }
+      const id = String(docId);
       const db = firebase.firestore();
-      await db.collection(collection).doc(docId).update({
+      await db.collection(collection).doc(id).update({
         ...data,
         updatedAt: new Date(),
         updatedBy: firebase.auth().currentUser?.uid || 'system'
       });
-      console.log(`✅ Updated ${collection}/${docId}`);
+      console.log(`✅ Updated ${collection}/${id}`);
       return { success: true };
     } catch (error) {
       console.warn(`⚠️  Firestore update failed (${collection}/${docId}):`, error.message);
@@ -575,14 +599,23 @@ window.FirestoreCRUD = {
   },
 
   // Delete document
+  //
+  // Same String() coercion story as update() above. This is the specific
+  // call path that was making "deleted on phone, comes back on MacBook after
+  // refresh": deleteClient / deleteAppt / deleteInv / deletePkg pass a raw
+  // numeric id, the old .doc(101).delete() silently no-ops, the local
+  // DB.X.filter() removes the row, user sees it disappear — then the
+  // snapshot rehydrates it back into the array because Firestore still has
+  // it. With String() forced, the delete always reaches the right doc.
   async delete(collection, docId) {
     try {
       if (!window.useFirebase || !window.useFirebase()) {
         throw new Error("Firebase not available");
       }
+      const id = String(docId);
       const db = firebase.firestore();
-      await db.collection(collection).doc(docId).delete();
-      console.log(`✅ Deleted ${collection}/${docId}`);
+      await db.collection(collection).doc(id).delete();
+      console.log(`✅ Deleted ${collection}/${id}`);
       return { success: true };
     } catch (error) {
       console.warn(`⚠️  Firestore delete failed (${collection}/${docId}):`, error.message);
