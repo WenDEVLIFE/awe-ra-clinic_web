@@ -15,18 +15,46 @@ function scheduleUIUpdate() {
     // This is what makes "Edit" on a service open the right record after a
     // concurrent insert from another device. Lives in the patched script.js.
     if (window.normalizeDB) window.normalizeDB();
-    if (window.refreshLoginBranchOptions) window.refreshLoginBranchOptions();
-    // Update ALL pages
-    if (window.renderDashboard) window.renderDashboard();
-    if (window.renderClients) window.renderClients();
-    if (window.renderSchedule) window.renderSchedule();
-    if (window.renderInventory) window.renderInventory();
-    if (window.renderPackages) window.renderPackages();
-    if (window.renderTreatments) window.renderTreatments();
-    if (window.renderUpcoming) window.renderUpcoming();
-    if (window.renderSales) window.renderSales();
-    if (window.updateUpcomingBadge) window.updateUpcomingBadge();
-    console.log("🔄 UI updated from Firestore data");
+
+    // Persist the merged DB to localStorage ONCE per debounce cycle, not
+    // per listener. The old code stringified the entire DB (10 collections,
+    // potentially hundreds of rows) inside every onSnapshot callback — ten
+    // listeners firing within a few seconds meant 10 full-DB stringifies
+    // + 10 setItem calls. That's a big chunk of the "10–15 second update
+    // time" the user was feeling.
+    try {
+      if (window.DB) localStorage.setItem('awera_clinic_v1', JSON.stringify(window.DB));
+    } catch (e) {
+      console.warn("⚠️  localStorage write failed:", e.message);
+    }
+
+    // Only re-render the page the user is currently looking at, plus a few
+    // always-visible widgets (nav badges, login branch select). The old
+    // code re-rendered all 9 pages on every snapshot regardless of which
+    // was active — a single client edit triggered 9 render passes, most of
+    // them writing into hidden DOM. That was the other big chunk of the
+    // update delay.
+    const page = (typeof window.currentPage === 'string') ? window.currentPage : null;
+    try {
+      if (window.refreshLoginBranchOptions) window.refreshLoginBranchOptions();
+      if (window.updateUpcomingBadge) window.updateUpcomingBadge();
+      if (page === 'dashboard' && window.renderDashboard) window.renderDashboard();
+      else if (page === 'clients' && window.renderClients) window.renderClients();
+      else if (page === 'schedule' && window.renderSchedule) window.renderSchedule();
+      else if (page === 'inventory' && window.renderInventory) window.renderInventory();
+      else if (page === 'packages' && window.renderPackages) window.renderPackages();
+      else if ((page === 'services' || page === 'treatments') && window.renderTreatments) window.renderTreatments();
+      else if (page === 'upcoming' && window.renderUpcoming) window.renderUpcoming();
+      else if (page === 'sales' && window.renderSales) window.renderSales();
+      else if (!page) {
+        // Cold boot / login screen — render dashboard so it's ready the
+        // moment the user lands on it after login.
+        if (window.renderDashboard) window.renderDashboard();
+      }
+    } catch (e) {
+      console.warn("⚠️  Render error during UI update:", e.message);
+    }
+    console.log(`🔄 UI updated from Firestore data (page=${page||'pre-login'})`);
   }, 200);
 }
 
@@ -317,8 +345,7 @@ async function initFirestoreLayer() {
       });
       if (window.DB) {
         window.DB.clients = clients;
-        // Save to localStorage as backup
-        localStorage.setItem('awera_clinic_v1', JSON.stringify(window.DB));
+        // localStorage write is consolidated into scheduleUIUpdate below.
       }
       console.log(`✅ Clients real-time sync: ${clients.length} records`);
       scheduleUIUpdate(); // Trigger UI update
@@ -338,8 +365,7 @@ async function initFirestoreLayer() {
       });
       if (window.DB) {
         window.DB.appointments = appointments;
-        // Save to localStorage as backup
-        localStorage.setItem('awera_clinic_v1', JSON.stringify(window.DB));
+        // localStorage write is consolidated into scheduleUIUpdate below.
       }
       console.log(`✅ Appointments synced: ${appointments.length} records`);
       scheduleUIUpdate(); // Trigger UI update
@@ -359,8 +385,7 @@ async function initFirestoreLayer() {
       });
       if (window.DB) {
         window.DB.inventory = inventory;
-        // Save to localStorage as backup
-        localStorage.setItem('awera_clinic_v1', JSON.stringify(window.DB));
+        // localStorage write is consolidated into scheduleUIUpdate below.
       }
       console.log(`✅ Inventory synced: ${inventory.length} records`);
       scheduleUIUpdate(); // Trigger UI update
@@ -380,8 +405,7 @@ async function initFirestoreLayer() {
       });
       if (window.DB) {
         window.DB.packages = packages;
-        // Save to localStorage as backup
-        localStorage.setItem('awera_clinic_v1', JSON.stringify(window.DB));
+        // localStorage write is consolidated into scheduleUIUpdate below.
       }
       console.log(`✅ Packages synced: ${packages.length} records`);
       scheduleUIUpdate(); // Trigger UI update
@@ -401,8 +425,7 @@ async function initFirestoreLayer() {
       });
       if (window.DB) {
         window.DB.treatments = treatments;
-        // Save to localStorage as backup
-        localStorage.setItem('awera_clinic_v1', JSON.stringify(window.DB));
+        // localStorage write is consolidated into scheduleUIUpdate below.
       }
       console.log(`✅ Treatments synced: ${treatments.length} records`);
       scheduleUIUpdate(); // Trigger UI update
@@ -422,8 +445,7 @@ async function initFirestoreLayer() {
       });
       if (window.DB) {
         window.DB.expenses = expenses;
-        // Save to localStorage as backup
-        localStorage.setItem('awera_clinic_v1', JSON.stringify(window.DB));
+        // localStorage write is consolidated into scheduleUIUpdate below.
       }
       console.log(`✅ Expenses synced: ${expenses.length} records`);
       scheduleUIUpdate(); // Trigger UI update
@@ -443,8 +465,7 @@ async function initFirestoreLayer() {
       });
       if (window.DB) {
         window.DB.purchases = purchases;
-        // Save to localStorage as backup
-        localStorage.setItem('awera_clinic_v1', JSON.stringify(window.DB));
+        // localStorage write is consolidated into scheduleUIUpdate below.
       }
       console.log(`✅ Purchases synced: ${purchases.length} records`);
       scheduleUIUpdate(); // Trigger UI update
@@ -464,8 +485,7 @@ async function initFirestoreLayer() {
       });
       if (window.DB) {
         window.DB.branches = branches;
-        // Save to localStorage as backup
-        localStorage.setItem('awera_clinic_v1', JSON.stringify(window.DB));
+        // localStorage write is consolidated into scheduleUIUpdate below.
       }
       console.log(`✅ Branches synced: ${branches.length} records`);
       if (window.refreshLoginBranchOptions) window.refreshLoginBranchOptions();
@@ -486,8 +506,7 @@ async function initFirestoreLayer() {
       });
       if (window.DB) {
         window.DB.payments = payments;
-        // Save to localStorage as backup
-        localStorage.setItem('awera_clinic_v1', JSON.stringify(window.DB));
+        // localStorage write is consolidated into scheduleUIUpdate below.
       }
       console.log(`✅ Payments synced: ${payments.length} records`);
       scheduleUIUpdate(); // Trigger UI update
@@ -507,8 +526,7 @@ async function initFirestoreLayer() {
       });
       if (window.DB) {
         window.DB.sessions = sessions;
-        // Save to localStorage as backup
-        localStorage.setItem('awera_clinic_v1', JSON.stringify(window.DB));
+        // localStorage write is consolidated into scheduleUIUpdate below.
       }
       console.log(`✅ Sessions synced: ${sessions.length} records`);
       scheduleUIUpdate(); // Trigger UI update
@@ -571,13 +589,28 @@ window.FirestoreCRUD = {
 
   // Update document
   //
-  // IMPORTANT: callers in script.js sometimes pass a numeric docId (e.g. 101)
-  // because the local DB stores numeric ids from the seed data. The Firebase
-  // compat SDK's .doc(<number>) behavior is inconsistent across versions —
-  // it can silently reject, and the caller's .catch() just logs a warning,
-  // so the local array update appears to succeed while Firestore never
-  // receives the write. Force String() coercion here so every call lands on
-  // a real document path regardless of how the caller typed its id.
+  // IMPORTANT history of this call:
+  //
+  // 1. Round 1 used .add() which made Firestore auto-generate doc ids. Fixed.
+  // 2. Round 2 forced String(docId) here because the compat SDK silently
+  //    no-ops .doc(<number>). Fixed.
+  // 3. Round 3 (this patch): switched from .update() to .set({merge:true}).
+  //    Reason: the compat SDK's .update() REQUIRES the doc to already exist
+  //    and throws `not-found` if it doesn't. That's exactly the case that
+  //    was making "log session resets to 0 on refresh" persist even after
+  //    round-2's fixes: some packages in DB.packages came from the old
+  //    localStorage seed data and never had a Firestore doc written for
+  //    them. saveSession() would mutate p.sessions locally → call
+  //    FirestoreCRUD.update('packages', String(p.id), p) → .update() throws
+  //    `not-found` → our .catch() logged a warning the user never saw → the
+  //    next packages snapshot replaced p with the seed-shaped version that
+  //    has no sessions. Sessions counter resets.
+  //
+  //    .set(data, {merge:true}) is create-or-patch. If the doc doesn't
+  //    exist yet, it creates it. If it does, it merges the provided fields.
+  //    This is what update() should have been all along for this app's
+  //    semantics, because we want "make Firestore reflect this object"
+  //    regardless of whether a doc already exists at that path.
   async update(collection, docId, data) {
     try {
       if (!window.useFirebase || !window.useFirebase()) {
@@ -585,11 +618,12 @@ window.FirestoreCRUD = {
       }
       const id = String(docId);
       const db = firebase.firestore();
-      await db.collection(collection).doc(id).update({
+      await db.collection(collection).doc(id).set({
         ...data,
+        id,                  // guarantee the data-field id matches the doc id
         updatedAt: new Date(),
         updatedBy: firebase.auth().currentUser?.uid || 'system'
-      });
+      }, { merge: true });
       console.log(`✅ Updated ${collection}/${id}`);
       return { success: true };
     } catch (error) {
