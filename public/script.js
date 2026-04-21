@@ -1224,48 +1224,102 @@ function fillPackageSelect(clientId, selectedId){
 // "+ New Appointment" button inside it knows what date to prefill.
 let _dayScheduleDate = null;
 
-// Open a modal listing every appointment on a given date, filtered to the
-// current branch. Clicking a row jumps to that appointment's edit modal.
-// Clicking "+ New Appointment" opens the New Appointment modal prefilled
-// with this date.
-function openDayScheduleModal(ds){
-  _dayScheduleDate = ds;
-  const br = DB.session.branch;
-  const dayAppts = DB.appointments
-    .filter(a => branchMatches(a.branch, br) && a.date === ds)
-    .sort((a,b) => (a.time||'').localeCompare(b.time||''));
-  const title = new Date(ds + 'T00:00').toLocaleDateString('en-US',
-    { weekday:'long', year:'numeric', month:'long', day:'numeric' });
-  document.getElementById('day-schedule-title').textContent = title;
-  const body = document.getElementById('day-schedule-body');
-  if(!dayAppts.length){
-    body.innerHTML = `<div class="empty" style="padding:20px;text-align:center;color:var(--muted)">No appointments scheduled for this day at ${esc(branchName(br))}.</div>`;
-  } else {
-    const rows = dayAppts.map(a => {
-      const c = findClientById(a.clientId);
-      const statusClass = a.status==='Confirmed' ? 'ok'
-                        : a.status==='Completed' ? 'ok'
-                        : (a.status==='Cancelled' || a.status==='No-show') ? 'bad'
-                        : 'info';
-      return `<tr style="cursor:pointer" onclick="closeModal('day-schedule-modal');openApptModal(${a.id})">
-        <td><b>${fmtTime(a.time)}</b></td>
-        <td>${c ? esc(c.fname+' '+c.lname) : '<span style="color:var(--muted)">— unknown —</span>'}</td>
-        <td>${esc(a.service||'')}</td>
-        <td>${esc(a.therapist||'')}</td>
-        <td><span class="pill ${statusClass}">${esc(a.status||'Booked')}</span></td>
-      </tr>`;
-    }).join('');
-    body.innerHTML = `
-      <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
-        ${dayAppts.length} appointment${dayAppts.length===1?'':'s'} at <b>${esc(branchName(br))}</b>. Click a row to edit.
-      </div>
-      <table>
-        <thead><tr><th>Time</th><th>Client</th><th>Service</th><th>Therapist</th><th>Status</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>`;
+// Handler invoked by the explicit Edit button beside each row. Exposed on
+// window so the inline onclick finds it regardless of bundling order.
+// Called out as a named function instead of an inline arrow because some
+// Safari/Mac builds were choking on the longer inline
+// onclick="closeModal(...);openApptModal(...)" string and silently skipping
+// the click. A named function reference is the safest contract cross-browser.
+function editApptFromDayModal(apptId){
+  try {
+    closeModal('day-schedule-modal');
+    openApptModal(apptId);
+  } catch (e) {
+    console.error('editApptFromDayModal failed:', e);
+    alert('Could not open that appointment: ' + (e && e.message || e));
   }
-  openModal('day-schedule-modal');
 }
+window.editApptFromDayModal = editApptFromDayModal;
+
+// Open a modal listing every appointment on a given date, filtered to the
+// current branch. Each row has an explicit "Edit" button at the end. The
+// whole row is NOT click-to-edit anymore — per user request, and also
+// silently broken on Safari/Mac (inline onclick on <tr> is the fiddliest
+// event target in the DOM; too many cross-browser edge cases).
+//
+// Wrapped in try/catch end-to-end so any render error surfaces in DevTools
+// instead of just leaving the calendar looking unresponsive on Mac.
+function openDayScheduleModal(ds){
+  try {
+    _dayScheduleDate = ds;
+    const br = (DB && DB.session) ? DB.session.branch : null;
+    const dayAppts = (DB.appointments || [])
+      .filter(a => branchMatches(a.branch, br) && a.date === ds)
+      .sort((a,b) => (a.time||'').localeCompare(b.time||''));
+
+    // Build the title defensively — `new Date(ds + 'T00:00')` has produced
+    // "Invalid Date" on some older Safari builds when ds is empty/odd.
+    let title = ds;
+    try {
+      const dt = new Date(ds + 'T00:00:00');
+      if (!isNaN(dt.getTime())) {
+        title = dt.toLocaleDateString('en-US',
+          { weekday:'long', year:'numeric', month:'long', day:'numeric' });
+      }
+    } catch (_) { /* fall back to raw ds */ }
+
+    const titleEl = document.getElementById('day-schedule-title');
+    const body = document.getElementById('day-schedule-body');
+    if (!titleEl || !body) {
+      console.error('openDayScheduleModal: required DOM ids missing. ' +
+        'Is the latest index.html deployed? Needed ids: day-schedule-title, day-schedule-body.');
+      alert('Day Schedule popup is not loaded. Hard-refresh (Cmd-Shift-R on Mac) and try again.');
+      return;
+    }
+    titleEl.textContent = title;
+
+    if(!dayAppts.length){
+      body.innerHTML = `<div class="empty" style="padding:20px;text-align:center;color:var(--muted)">No appointments scheduled for this day at ${esc(branchName(br))}.</div>`;
+    } else {
+      const rows = dayAppts.map(a => {
+        const c = findClientById(a.clientId);
+        const statusClass = a.status==='Confirmed' ? 'ok'
+                          : a.status==='Completed' ? 'ok'
+                          : (a.status==='Cancelled' || a.status==='No-show') ? 'bad'
+                          : 'info';
+        const clientLbl = c
+          ? esc(c.fname + ' ' + c.lname)
+          : '<span style="color:var(--muted)">— unknown —</span>';
+        // JSON.stringify safely escapes the id whether it's a number or a
+        // Firestore-generated string like "ab12Cd" — so the inline onclick
+        // always parses even on Safari's stricter quote handling.
+        const idArg = JSON.stringify(String(a.id));
+        return `<tr>
+          <td><b>${fmtTime(a.time)}</b></td>
+          <td>${clientLbl}</td>
+          <td>${esc(a.service||'')}</td>
+          <td>${esc(a.therapist||'')}</td>
+          <td><span class="pill ${statusClass}">${esc(a.status||'Booked')}</span></td>
+          <td><button class="btn small secondary" onclick="editApptFromDayModal(${idArg})">Edit</button></td>
+        </tr>`;
+      }).join('');
+      body.innerHTML = `
+        <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
+          ${dayAppts.length} appointment${dayAppts.length===1?'':'s'} at <b>${esc(branchName(br))}</b>. Click <b>Edit</b> on any row.
+        </div>
+        <table>
+          <thead><tr><th>Time</th><th>Client</th><th>Service</th><th>Therapist</th><th>Status</th><th>Edit</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>`;
+    }
+    openModal('day-schedule-modal');
+  } catch (e) {
+    console.error('openDayScheduleModal failed for ds=' + ds + ':', e);
+    alert('Could not open the day schedule: ' + (e && e.message || e) +
+      '\n\nIf this keeps happening on Mac, open the browser console and send me the red error line.');
+  }
+}
+window.openDayScheduleModal = openDayScheduleModal;
 
 // Called by the "+ New Appointment" button inside the day-schedule modal.
 // Closes the day modal, then opens the appointment modal prefilled with the
@@ -1275,6 +1329,7 @@ function addApptFromDayModal(){
   closeModal('day-schedule-modal');
   openApptModal(null, ds);
 }
+window.addApptFromDayModal = addApptFromDayModal;
 
 function openApptModal(id, prefillDate){
   fillClientSelect('a-client');
