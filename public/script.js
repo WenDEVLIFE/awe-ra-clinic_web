@@ -496,21 +496,23 @@ function renderClients(){
   const filtered = DB.clients.filter(c=>{
     if(!branchMatches(c.homeBranch, br)) return false;
     if(!q) return true;
-    return (c.fname+' '+c.lname+' '+c.phone+' '+c.email).toLowerCase().includes(q);
+    // Address is now searchable too (email dropped from display; still
+    // searched in case some old clients were only findable by it).
+    return (c.fname+' '+c.lname+' '+(c.phone||'')+' '+(c.address||'')+' '+(c.email||'')).toLowerCase().includes(q);
   });
   const tbl = document.getElementById('clients-table');
   if(!filtered.length){ tbl.innerHTML = '<div class="empty">No clients found. Click "+ New Client" to add one.</div>'; return; }
   const rows = filtered.map(c=>`<tr>
     <td><b>${esc(c.lname)}, ${esc(c.fname)}</b></td>
     <td>${esc(c.phone||'—')}</td>
-    <td>${esc(c.email||'—')}</td>
     <td>${esc(branchName(c.homeBranch))}</td>
+    <td>${esc(c.address||'—')}</td>
     <td>
       <button class="btn small secondary" onclick="viewClient(${c.id})">View</button>
       <button class="btn small secondary" onclick="openClientModal(${c.id})">Edit</button>
       <button class="btn small danger" onclick="deleteClient(${c.id})">Delete</button>
     </td></tr>`).join('');
-  tbl.innerHTML = `<table><thead><tr><th>Name</th><th>Phone</th><th>Email</th><th>Home Branch</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>`;
+  tbl.innerHTML = `<table><thead><tr><th>Name</th><th>Phone</th><th>Home Branch</th><th>Address</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 // Populate the two <datalist> dropdowns with names already entered
@@ -691,11 +693,10 @@ function viewClient(id){
     <h3 style="margin-top:0">${esc(c.fname+' '+c.lname)}</h3>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:13px;margin-bottom:14px">
       <div><b>Phone:</b> ${esc(c.phone||'—')}</div>
-      <div><b>Email:</b> ${esc(c.email||'—')}</div>
       <div><b>Birthdate:</b> ${esc(c.bday||'—')}</div>
       <div><b>Gender:</b> ${esc(c.gender||'—')}</div>
+      <div><b>Home Branch:</b> ${esc(branchName(c.homeBranch))}</div>
       <div style="grid-column:span 2"><b>Address:</b> ${esc(c.address||'—')}</div>
-      <div style="grid-column:span 2"><b>Home Branch:</b> ${esc(branchName(c.homeBranch))}</div>
       <div><b>Skin Specialist:</b> ${esc(c.skinSpecialist||'—')}</div>
       <div><b>Facialist:</b> ${esc(c.facialist||'—')}</div>
     </div>
@@ -955,17 +956,24 @@ function collectDayPayments(date){
       });
     });
   });
-  // Product purchases — only those marked paid
+  // Product purchases — only those marked paid.
+  // Walk-in service payments are ALSO stored in DB.purchases with type:'service'
+  // so they ride the same Firestore `purchases` listener. The kind we emit
+  // here ('walkin' vs 'purchase') drives the Source badge in renderSales.
   (DB.purchases||[]).forEach(pu=>{
     if(!pu.paid) return;
     if(pu.date !== date) return;
     if(!salesBranchMatch(pu.branch)) return;
-    const client = DB.clients.find(c=>c.id===pu.clientId);
+    const client = DB.clients.find(c=>String(c.id)===String(pu.clientId));
+    const isWalkin = pu.type === 'service';
     out.push({
-      kind:'purchase',
+      kind: isWalkin ? 'walkin' : 'purchase',
       time: pu.id || 0,
-      clientName: client ? (client.fname+' '+client.lname) : '—',
-      description: pu.itemName + ' × ' + pu.qty,
+      purchaseId: pu.id,
+      clientName: client ? (client.fname+' '+client.lname) : (pu.clientName || '—'),
+      description: isWalkin
+        ? (pu.itemName || 'Walk-in service')
+        : (pu.itemName + ' × ' + pu.qty),
       method: pu.method || 'Cash',
       amount: +pu.total || 0,
       surcharge: +pu.surcharge || 0,
@@ -1019,9 +1027,18 @@ function renderSales(){
         ? money(p.surcharge)
         : (isCard && p.surchargeWaived ? '<span style="color:var(--muted);font-style:italic">waived</span>' : '—');
       const branchTag = '';
-      const sourceTag = p.kind==='purchase'
-        ? `<span class="pill" style="background:#fde68a;color:#92400e">Product</span>`
-        : `<span class="pill" style="background:#dbeafe;color:#1e40af">Package</span>`;
+      const sourceTag = p.kind==='walkin'
+        ? `<span class="pill" style="background:#fef3c7;color:#92400e">Walk-in</span>`
+        : p.kind==='purchase'
+          ? `<span class="pill" style="background:#fde68a;color:#92400e">Product</span>`
+          : `<span class="pill" style="background:#dbeafe;color:#1e40af">Package</span>`;
+      // Only walk-in rows get a Delete button in the Actions column — package
+      // payments are managed from the package's detail view, and product
+      // purchases from the Packages / Inventory workflow; deleting those
+      // would be a bigger cascade. Walk-ins are self-contained.
+      const actionsCell = p.kind==='walkin'
+        ? `<button class="btn small danger" onclick="deleteWalkin(${JSON.stringify(String(p.purchaseId))})">Delete</button>`
+        : '';
       return `<tr>
         <td>${sourceTag}</td>
         <td><b>${esc(p.clientName)}</b>${branchTag}</td>
@@ -1029,15 +1046,17 @@ function renderSales(){
         <td>${methodPill}</td>
         <td style="text-align:right;font-weight:600">${money(p.amount)}</td>
         <td style="text-align:right">${surchargeCell}</td>
+        <td style="text-align:right">${actionsCell}</td>
       </tr>`;
     }).join('');
     payEl.innerHTML = `<table>
-      <thead><tr><th>Source</th><th>Client</th><th>Item / Service</th><th>Method</th><th style="text-align:right">Amount</th><th style="text-align:right">Surcharge</th></tr></thead>
+      <thead><tr><th>Source</th><th>Client</th><th>Item / Service</th><th>Method</th><th style="text-align:right">Amount</th><th style="text-align:right">Surcharge</th><th style="text-align:right">Actions</th></tr></thead>
       <tbody>${rows}</tbody>
       <tfoot><tr style="background:var(--blue-ghost);font-weight:700">
         <td colspan="4" style="text-align:right">Day Total</td>
         <td style="text-align:right">${money(totalSales)}</td>
         <td style="text-align:right">${money(cardSurcharge)}</td>
+        <td></td>
       </tr></tfoot>
     </table>`;
   }
@@ -2177,6 +2196,15 @@ function openPkgModal(id, prefillClientId){
     });
     document.getElementById('p-treatment').disabled = false;
   }
+  // "Record to today's sales" checkbox — hidden on edit (only applies at
+  // creation time), reset to unchecked on every open so it never silently
+  // carries over from a previous new-package session.
+  const toSales = document.getElementById('p-to-sales');
+  if(toSales){
+    toSales.checked = false;
+    const row = toSales.closest('.form-row');
+    if(row) row.style.display = id ? 'none' : '';
+  }
   updateDiscountBadge();
   updatePaidPreview();
   openModal('pkg-modal');
@@ -2226,8 +2254,16 @@ function savePkg(){
     rec.sessions = [];
     rec.payments = [];
     rec.priceLocked = false;
-    // Auto-record downpayment as the first payment and lock price
-    if(downpayment>0){
+    // Only create the downpayment payment record — and therefore make this
+    // package show up on today's Sales page — if the user explicitly ticked
+    // "Record downpayment to today's sales" on the package form. This is a
+    // behavior change from earlier builds, where entering any downpayment
+    // amount automatically created a sale entry. Per user request: creating
+    // a package should NOT silently land on the day's sales; that stays an
+    // opt-in, either via this checkbox at creation time or via the
+    // "Add Payment" flow in the package's detail view afterward.
+    const recordToSales = !!document.getElementById('p-to-sales')?.checked;
+    if(recordToSales && downpayment>0){
       rec.payments.push({
         id: nextId('payment'),
         date: rec.dateStarted,
@@ -2235,7 +2271,7 @@ function savePkg(){
         type: 'Downpayment',
         method: 'Cash',
         ref: '',
-        notes: 'Initial downpayment (auto-recorded)'
+        notes: 'Initial downpayment (recorded to today\u2019s sales at package creation)'
       });
       rec.priceLocked = true;
     }
@@ -2563,6 +2599,204 @@ function savePayment(){
   renderDashboard();
   if(currentPkgId===pkgId){ viewPkg(pkgId); }
 }
+
+// -------- Add Payment (walk-in / comeback / one-off) --------
+// User-facing: the "+ Add Payment" button on the Sales page, next to
+// "+ Add Expense". Captures a client (auto-adds to Client list if new) and
+// records a payment for today. Treatment and/or Product — at least one.
+// Stored as a row in DB.purchases with type:'service' so it rides the
+// existing `purchases` Firestore listener without needing a new collection
+// or listener in firestore-layer.js. collectDayPayments tags these as
+// kind:'walkin' for badge rendering in Sales.
+
+function openWalkinModal(){
+  // Reset form
+  ['w-fname','w-lname','w-phone','w-address','w-product','w-notes'].forEach(i=>{
+    const el = document.getElementById(i); if(el) el.value = '';
+  });
+  const priceEl = document.getElementById('w-price');
+  if(priceEl) priceEl.value = 0;
+  const methodEl = document.getElementById('w-method');
+  if(methodEl) methodEl.value = 'Cash';
+
+  // Populate treatment dropdown from catalog (services for the current branch).
+  // Keep it optional — default to the "— none —" row so user can record a
+  // product-only payment without picking a service.
+  const sel = document.getElementById('w-service');
+  if(sel){
+    const treatments = (DB.treatments||[]).slice()
+      .sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+    sel.innerHTML = '<option value="">— none —</option>' +
+      treatments.map(t =>
+        `<option value="${String(t.id)}" data-price="${+t.pricePerSession||0}">${esc(t.name)} (${money(+t.pricePerSession||0)})</option>`
+      ).join('');
+    sel.value = '';
+  }
+  openModal('walkin-modal');
+}
+window.openWalkinModal = openWalkinModal;
+
+// When user picks a treatment, auto-fill Amount from that service's price.
+// Leaves it editable for bargains/promos — the user's sample report showed
+// "Hydra" at different prices for different clients, so this is intentional.
+function onWalkinServiceChange(){
+  const sel = document.getElementById('w-service');
+  const priceEl = document.getElementById('w-price');
+  if(!sel || !priceEl) return;
+  const opt = sel.options[sel.selectedIndex];
+  const price = opt ? +opt.getAttribute('data-price') || 0 : 0;
+  // Only overwrite if user hasn't typed something non-zero yet, OR the
+  // current value matches the previously selected option's price. Simpler:
+  // always overwrite — the "optional, editable" hint text already told them
+  // to edit after selecting. Keeps behavior predictable.
+  if(price > 0) priceEl.value = price;
+}
+window.onWalkinServiceChange = onWalkinServiceChange;
+
+function saveWalkin(){
+  try {
+    const fname   = (document.getElementById('w-fname').value||'').trim();
+    const lname   = (document.getElementById('w-lname').value||'').trim();
+    const phone   = (document.getElementById('w-phone').value||'').trim();
+    const address = (document.getElementById('w-address').value||'').trim();
+    const svcId   = (document.getElementById('w-service').value||'').trim();
+    const product = (document.getElementById('w-product').value||'').trim();
+    const amount  = +document.getElementById('w-price').value || 0;
+    const method  = document.getElementById('w-method').value || 'Cash';
+    const notes   = document.getElementById('w-notes').value || '';
+    if(!fname || !lname){ alert('First and last name are required.'); return; }
+    if(!phone){ alert('Contact number is required.'); return; }
+    if(amount <= 0){ alert('Amount must be greater than 0.'); return; }
+    if(!svcId && !product){
+      alert('Fill in either a Treatment or a Product (or both).');
+      return;
+    }
+    const branch = DB.session.branch;
+    const svc = svcId
+      ? (DB.treatments||[]).find(t => String(t.id) === String(svcId))
+      : null;
+
+    // ---- Client lookup / create ----
+    // Match on fname + lname + same branch (case-insensitive). If found,
+    // reuse the existing client id and silently update phone/address if
+    // the new values are non-empty and different. If not found, create
+    // a new client and sync to Firestore.
+    const norm = s => (s||'').trim().toLowerCase();
+    let client = (DB.clients||[]).find(c =>
+      norm(c.fname) === norm(fname) &&
+      norm(c.lname) === norm(lname) &&
+      branchMatches(c.homeBranch, branch)
+    );
+    if(!client){
+      client = {
+        id: nextId('client'),
+        fname, lname,
+        phone,
+        email: '',                  // no longer UI-captured; preserved for schema
+        bday: '',
+        gender: 'Female',
+        address,
+        homeBranch: branch,
+        skinSpecialist: '',
+        facialist: '',
+        medical: '',
+        notes: 'Created from Sales › + Add Payment on ' + todayStr(),
+        created: Date.now()
+      };
+      DB.clients.push(client);
+      if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD){
+        window.FirestoreCRUD.add('clients', client)
+          .catch(err => console.error('Firestore client add error:', err));
+      }
+    } else {
+      // Patch phone/address non-destructively if the reception typed
+      // something new. Don't clobber with blanks.
+      let touched = false;
+      if(phone && phone !== client.phone){ client.phone = phone; touched = true; }
+      if(address && address !== client.address){ client.address = address; touched = true; }
+      if(touched && window.useFirebase && window.useFirebase() && window.FirestoreCRUD){
+        window.FirestoreCRUD.update('clients', String(client.id), client)
+          .catch(err => console.error('Firestore client update error:', err));
+      }
+    }
+
+    // ---- Build the description that shows up on the Sales row ----
+    const descParts = [];
+    if(svc) descParts.push(svc.name);
+    if(product) descParts.push('Product: ' + product);
+    const description = descParts.join(' + ') || 'Walk-in payment';
+
+    // ---- Record the payment as a purchase row (type:'service') ----
+    // Reusing DB.purchases means we don't have to wire a new Firestore
+    // listener into firestore-layer.js. Fields chosen so collectDayPayments
+    // picks it up unchanged: paid=true, date=today, branch set, total set.
+    const purchaseId = nextId('purchase');
+    const rec = {
+      id: purchaseId,
+      type: 'service',                     // signal to collectDayPayments
+      clientId: client.id,
+      clientName: client.fname+' '+client.lname,   // denormalized for offline readability
+      branch,
+      date: todayStr(),
+      itemName: description,
+      treatmentId: svc ? svc.id : null,
+      productText: product,
+      qty: 1,
+      unitPrice: amount,
+      total: amount,
+      method,
+      paid: true,
+      surcharge: 0,
+      surchargeWaived: false,
+      ref: '',
+      notes,
+      createdAt: new Date().toISOString(),
+      createdBy: (firebase.auth().currentUser && firebase.auth().currentUser.uid) || 'system'
+    };
+    DB.purchases = DB.purchases || [];
+    DB.purchases.push(rec);
+    if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD){
+      window.FirestoreCRUD.add('purchases', rec)
+        .catch(err => console.error('Firestore purchase add error:', err));
+    }
+
+    saveData();
+    closeModal('walkin-modal');
+    // Re-render whatever page the user is on. Sales is the likely case.
+    if(currentPage === 'sales') renderSales();
+    if(currentPage === 'clients') renderClients();
+    if(currentPage === 'dashboard') renderDashboard();
+    alert('Payment recorded. ' + client.fname + ' ' + client.lname +
+      (DB.clients.filter(c => String(c.id) === String(client.id)).length === 1 ? ' added to the Client list.' : ''));
+  } catch(e){
+    console.error('saveWalkin failed:', e);
+    alert('Could not save payment: ' + (e && e.message || e));
+  }
+}
+window.saveWalkin = saveWalkin;
+
+// Removes a walk-in payment. Does NOT delete the auto-created client —
+// the client record stands on its own once added (they might still come
+// back as a regular customer).
+function deleteWalkin(purchaseId){
+  try {
+    if(!confirm('Remove this payment? The client record stays in the Client list.')) return;
+    const id = String(purchaseId);
+    const idx = (DB.purchases||[]).findIndex(p => String(p.id) === id);
+    if(idx < 0){ alert('Payment not found.'); return; }
+    DB.purchases.splice(idx, 1);
+    if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD){
+      window.FirestoreCRUD.delete('purchases', id)
+        .catch(err => console.error('Firestore purchase delete error:', err));
+    }
+    saveData();
+    if(currentPage === 'sales') renderSales();
+  } catch(e){
+    console.error('deleteWalkin failed:', e);
+    alert('Could not delete payment: ' + (e && e.message || e));
+  }
+}
+window.deleteWalkin = deleteWalkin;
 
 function removePayment(pkgId, payId){
   if(!confirm('Remove this payment?')) return;
