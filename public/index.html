@@ -254,9 +254,12 @@
     <div id="sales-payments"></div>
 
     <!-- Expenses list -->
-    <h3 style="margin-top:24px;display:flex;justify-content:space-between;align-items:center">
+    <h3 style="margin-top:24px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
       Daily Expenses
-      <button class="btn small" onclick="openExpenseModal()">+ Add Expense</button>
+      <span style="display:inline-flex;gap:8px">
+        <button class="btn small" onclick="openExpenseModal()">+ Add Expense</button>
+        <button class="btn small" onclick="openWalkinModal()">+ Add Payment</button>
+      </span>
     </h3>
     <div id="sales-expenses"></div>
 
@@ -313,7 +316,10 @@
         <div class="form-row"><label>First Name *</label><input type="text" id="c-fname"/></div>
         <div class="form-row"><label>Last Name *</label><input type="text" id="c-lname"/></div>
         <div class="form-row"><label>Phone</label><input type="text" id="c-phone"/></div>
-        <div class="form-row"><label>Email</label><input type="email" id="c-email"/></div>
+        <!-- Email field dropped from UI per user request. Kept as a hidden input so
+             saveClient() doesn't crash on getElementById('c-email').value and so
+             any existing email data on a client record is preserved on edit. -->
+        <input type="hidden" id="c-email"/>
         <div class="form-row"><label>Birthdate</label><input type="date" id="c-bday"/></div>
         <div class="form-row"><label>Gender</label><select id="c-gender"><option>Female</option><option>Male</option><option>Prefer not to say</option></select></div>
       </div>
@@ -483,6 +489,13 @@
           <input type="number" id="p-price" value="0" step="0.01" min="0" oninput="onTotalPriceEdited()"/>
         </div>
         <div class="form-row"><label>Downpayment (₱)</label><input type="number" id="p-down" value="0" step="0.01" min="0" oninput="updatePaidPreview()"/></div>
+        <div class="form-row">
+          <label style="display:flex;align-items:center;gap:8px;font-weight:400;cursor:pointer">
+            <input type="checkbox" id="p-to-sales" style="width:auto;margin:0"/>
+            Record downpayment to today's sales
+          </label>
+          <small style="color:var(--muted);font-size:11px;margin-top:2px">Leave unticked if the client will pay later. You can always record a payment from the package's detail view afterward.</small>
+        </div>
         <div class="form-row"><label>Recommended Gap (days)</label><input type="number" id="p-gap" value="14" min="1"/></div>
         <div class="form-row"><label>Date Started</label><input type="date" id="p-start"/></div>
         <div class="form-row"><label>Status</label>
@@ -493,7 +506,7 @@
       <div id="p-discount-badge" style="display:none;background:var(--gold-soft);border-left:3px solid var(--gold);padding:8px 10px;border-radius:6px;font-size:12px;color:var(--gold-dark);margin-bottom:10px"></div>
       <div class="form-row"><label>Notes</label><textarea id="p-notes" placeholder="Promo, therapist of choice, special requirements..."></textarea></div>
       <div style="background:var(--blue-ghost);border:1px solid var(--border-blue);padding:10px;border-radius:6px;font-size:12px;color:var(--blue);margin-top:8px">
-        The downpayment is automatically recorded as the first payment, and the price is then locked against future treatment catalog changes. The client will also appear in tomorrow's follow-up list for first-session scheduling.
+        If "Record downpayment to today's sales" is ticked, the downpayment is recorded as the first payment and the price is locked against future catalog changes. If unticked, no payment is recorded and nothing shows on the Sales page — add it later from the package's detail view when you need to.
       </div>
     </div>
     <div class="footer">
@@ -677,6 +690,69 @@
 
 <!-- EXPENSE MODAL -->
 <div id="firebase-status" style="position:fixed;bottom:10px;right:10px;padding:8px 12px;background:#2f4858;color:#fff;border-radius:4px;font-size:11px;z-index:50;display:none">Firebase: Initializing...</div>
+
+<!-- Add Payment modal. Used on the Sales page via "+ Add Payment". Captures
+     a client who paid today — for a treatment, a product, or both. Handles
+     all three report categories (customer service / comeback / walk-in) —
+     we don't separate them in storage; they all just become "payments".
+     Also auto-creates the client in the Client list if a matching name on
+     the current branch isn't found. Stored in DB.purchases with
+     type:'service' so it rides the existing purchases Firestore listener
+     (no new listener needed). Treatment and Product are both optional —
+     at least one must be filled. -->
+<div class="modal-backdrop" id="walkin-modal">
+  <div class="modal">
+    <header><h3>Add Payment</h3><button class="close-x" onclick="closeModal('walkin-modal')">×</button></header>
+    <div class="body">
+      <div style="background:var(--blue-ghost);border:1px solid var(--border-blue);padding:10px;border-radius:6px;font-size:12px;color:var(--blue);margin-bottom:12px">
+        Record a payment that isn't tied to an existing package. Works for walk-ins, comeback clients, and one-off treatment/product purchases. Fill in at least one of Treatment or Product. The client is auto-added to the Client list on this branch if they're not already there.
+      </div>
+
+      <h4 style="margin:0 0 8px 0;font-size:13px;color:var(--blue)">Client details</h4>
+      <div class="form-grid">
+        <div class="form-row"><label>First Name *</label><input type="text" id="w-fname"/></div>
+        <div class="form-row"><label>Last Name *</label><input type="text" id="w-lname"/></div>
+        <div class="form-row"><label>Contact # *</label><input type="text" id="w-phone" placeholder="09XX-XXX-XXXX"/></div>
+        <div class="form-row"><label>Address</label><input type="text" id="w-address" placeholder="Barangay, Municipality, Province"/></div>
+      </div>
+
+      <h4 style="margin:14px 0 8px 0;font-size:13px;color:var(--blue)">What was paid for</h4>
+      <div class="form-grid">
+        <div class="form-row">
+          <label>Treatment</label>
+          <select id="w-service" onchange="onWalkinServiceChange()">
+            <option value="">— none —</option>
+          </select>
+          <small style="color:var(--muted);font-size:11px;margin-top:2px">Optional. Picking one pre-fills the Amount.</small>
+        </div>
+        <div class="form-row">
+          <label>Product</label>
+          <input type="text" id="w-product" placeholder="e.g. Gluta drip, Vit-C ampoule"/>
+          <small style="color:var(--muted);font-size:11px;margin-top:2px">Optional. Free-text — for tracking what was bought.</small>
+        </div>
+      </div>
+
+      <h4 style="margin:14px 0 8px 0;font-size:13px;color:var(--blue)">Payment</h4>
+      <div class="form-grid">
+        <div class="form-row"><label>Amount (₱) *</label><input type="number" id="w-price" value="0" step="0.01" min="0"/><small style="color:var(--muted);font-size:11px;margin-top:2px">Pre-filled from the treatment; edit freely for bargains/promos.</small></div>
+        <div class="form-row"><label>Mode of Payment</label>
+          <select id="w-method">
+            <option>Cash</option>
+            <option>GCash</option>
+            <option>Check</option>
+            <option>Bank Transfer</option>
+            <option>Card</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row"><label>Notes</label><textarea id="w-notes" placeholder="Optional — promo code, referral, check number, ref #, etc."></textarea></div>
+    </div>
+    <div class="footer">
+      <button class="btn secondary" onclick="closeModal('walkin-modal')">Cancel</button>
+      <button class="btn" onclick="saveWalkin()">Save Payment</button>
+    </div>
+  </div>
+</div>
 
 <div class="modal-backdrop" id="expense-modal">
   <div class="modal">
