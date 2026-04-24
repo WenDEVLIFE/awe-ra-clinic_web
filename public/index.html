@@ -700,56 +700,150 @@
      type:'service' so it rides the existing purchases Firestore listener
      (no new listener needed). Treatment and Product are both optional —
      at least one must be filled. -->
+<!-- Add Payment modal (round 4).
+     Two modes:
+       • Existing Client — search any client (all branches), click to load
+         their info inline, then apply a payment. If the client has an
+         active package, the amount is split evenly across the sessions
+         they've availed (per client request). Otherwise it's a one-off
+         service/product payment.
+       • New Client — quick-register a new client AND record a one-time
+         service or product purchase in one go.
+
+     Both modes write to the same underlying data: DB.purchases for one-offs
+     (type:'service') and DB.packages[].payments for package payments. -->
 <div class="modal-backdrop" id="walkin-modal">
-  <div class="modal">
+  <div class="modal" style="max-width:720px">
     <header><h3>Add Payment</h3><button class="close-x" onclick="closeModal('walkin-modal')">×</button></header>
     <div class="body">
-      <div style="background:var(--blue-ghost);border:1px solid var(--border-blue);padding:10px;border-radius:6px;font-size:12px;color:var(--blue);margin-bottom:12px">
-        Record a payment that isn't tied to an existing package. Works for walk-ins, comeback clients, and one-off treatment/product purchases. Fill in at least one of Treatment or Product. The client is auto-added to the Client list on this branch if they're not already there.
+
+      <!-- Mode tabs -->
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <button id="walkin-tab-existing" class="btn" onclick="switchWalkinTab('existing')" style="flex:1">Existing Client</button>
+        <button id="walkin-tab-new" class="btn secondary" onclick="switchWalkinTab('new')" style="flex:1">New Client</button>
       </div>
 
-      <h4 style="margin:0 0 8px 0;font-size:13px;color:var(--blue)">Client details</h4>
-      <div class="form-grid">
-        <div class="form-row"><label>First Name *</label><input type="text" id="w-fname"/></div>
-        <div class="form-row"><label>Last Name *</label><input type="text" id="w-lname"/></div>
-        <div class="form-row"><label>Contact # *</label><input type="text" id="w-phone" placeholder="09XX-XXX-XXXX"/></div>
-        <div class="form-row"><label>Address</label><input type="text" id="w-address" placeholder="Barangay, Municipality, Province"/></div>
-      </div>
+      <!-- ============== EXISTING CLIENT ============== -->
+      <div id="walkin-existing-section">
+        <div style="background:var(--blue-ghost);border:1px solid var(--border-blue);padding:10px;border-radius:6px;font-size:12px;color:var(--blue);margin-bottom:12px">
+          Search by name or contact. Click a result to load the client's active packages and record a payment. If you pick a package, the amount is split evenly across the sessions already availed.
+        </div>
 
-      <h4 style="margin:14px 0 8px 0;font-size:13px;color:var(--blue)">What was paid for</h4>
-      <div class="form-grid">
         <div class="form-row">
-          <label>Treatment</label>
-          <select id="w-service" onchange="onWalkinServiceChange()">
-            <option value="">— none —</option>
-          </select>
-          <small style="color:var(--muted);font-size:11px;margin-top:2px">Optional. Picking one pre-fills the Amount.</small>
+          <label>Find Client</label>
+          <input type="text" id="walkin-search" placeholder="Type first or last name, or phone…" oninput="searchWalkinClients()" autocomplete="off"/>
         </div>
-        <div class="form-row">
-          <label>Product</label>
-          <input type="text" id="w-product" placeholder="e.g. Gluta drip, Vit-C ampoule"/>
-          <small style="color:var(--muted);font-size:11px;margin-top:2px">Optional. Free-text — for tracking what was bought.</small>
+        <div id="walkin-search-results" style="max-height:180px;overflow-y:auto;margin-bottom:10px"></div>
+
+        <!-- Selected client + payment form (hidden until a client is picked) -->
+        <div id="walkin-selected-client" style="display:none">
+          <div id="walkin-client-info" style="background:var(--blue-ghost);border:1px solid var(--border-blue);padding:10px;border-radius:6px;margin-bottom:10px;font-size:13px"></div>
+
+          <h4 style="margin:10px 0 6px 0;font-size:13px;color:var(--blue)">Payment</h4>
+
+          <div class="form-row">
+            <label>Apply to *</label>
+            <select id="walkin-apply-to" onchange="onWalkinApplyToChange()">
+              <option value="oneoff">One-off service / product payment</option>
+            </select>
+            <small style="color:var(--muted);font-size:11px;margin-top:2px">If you pick a package, the amount is split evenly across the sessions the client has already availed.</small>
+          </div>
+
+          <!-- Fields that only apply to a one-off payment -->
+          <div id="walkin-oneoff-fields">
+            <div class="form-grid">
+              <div class="form-row">
+                <label>Treatment</label>
+                <select id="walkin-oneoff-svc" onchange="onWalkinExistServiceChange()">
+                  <option value="">— none —</option>
+                </select>
+                <small style="color:var(--muted);font-size:11px;margin-top:2px">Optional. Picking one pre-fills the amount.</small>
+              </div>
+              <div class="form-row">
+                <label>Product</label>
+                <input type="text" id="walkin-oneoff-product" placeholder="e.g. Gluta drip, Vit-C ampoule"/>
+                <small style="color:var(--muted);font-size:11px;margin-top:2px">Optional. At least one of Treatment or Product required for one-off.</small>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-grid">
+            <div class="form-row">
+              <label>Amount (₱) *</label>
+              <input type="number" id="walkin-exist-amount" value="0" step="0.01" min="0" oninput="updateWalkinSplitPreview()"/>
+            </div>
+            <div class="form-row">
+              <label>Mode of Payment</label>
+              <select id="walkin-exist-method">
+                <option>Cash</option>
+                <option>GCash</option>
+                <option>Check</option>
+                <option>Bank Transfer</option>
+                <option>Card</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Split preview shown only when a package is selected -->
+          <div id="walkin-split-info" style="display:none;background:#fef3c7;border:1px solid #f59e0b;border-left:3px solid #d97706;padding:8px 10px;border-radius:6px;font-size:12px;color:#78350f;margin:6px 0"></div>
+
+          <div class="form-row">
+            <label>Notes</label>
+            <textarea id="walkin-exist-notes" placeholder="Optional — promo code, referral, check number, ref #, etc."></textarea>
+          </div>
         </div>
       </div>
 
-      <h4 style="margin:14px 0 8px 0;font-size:13px;color:var(--blue)">Payment</h4>
-      <div class="form-grid">
-        <div class="form-row"><label>Amount (₱) *</label><input type="number" id="w-price" value="0" step="0.01" min="0"/><small style="color:var(--muted);font-size:11px;margin-top:2px">Pre-filled from the treatment; edit freely for bargains/promos.</small></div>
-        <div class="form-row"><label>Mode of Payment</label>
-          <select id="w-method">
-            <option>Cash</option>
-            <option>GCash</option>
-            <option>Check</option>
-            <option>Bank Transfer</option>
-            <option>Card</option>
-          </select>
+      <!-- ============== NEW CLIENT ============== -->
+      <div id="walkin-new-section" style="display:none">
+        <div style="background:var(--blue-ghost);border:1px solid var(--border-blue);padding:10px;border-radius:6px;font-size:12px;color:var(--blue);margin-bottom:12px">
+          Register a brand-new client AND record a one-time service or product purchase. The client is added to the Client list automatically. Fill in at least one of Treatment or Product.
         </div>
+
+        <h4 style="margin:0 0 8px 0;font-size:13px;color:var(--blue)">Client details</h4>
+        <div class="form-grid">
+          <div class="form-row"><label>First Name *</label><input type="text" id="w-fname"/></div>
+          <div class="form-row"><label>Last Name *</label><input type="text" id="w-lname"/></div>
+          <div class="form-row"><label>Contact # *</label><input type="text" id="w-phone" placeholder="09XX-XXX-XXXX"/></div>
+          <div class="form-row"><label>Address</label><input type="text" id="w-address" placeholder="Barangay, Municipality, Province"/></div>
+        </div>
+
+        <h4 style="margin:14px 0 8px 0;font-size:13px;color:var(--blue)">What was paid for</h4>
+        <div class="form-grid">
+          <div class="form-row">
+            <label>Treatment</label>
+            <select id="w-service" onchange="onWalkinServiceChange()">
+              <option value="">— none —</option>
+            </select>
+            <small style="color:var(--muted);font-size:11px;margin-top:2px">Optional. Picking one pre-fills the Amount.</small>
+          </div>
+          <div class="form-row">
+            <label>Product</label>
+            <input type="text" id="w-product" placeholder="e.g. Gluta drip, Vit-C ampoule"/>
+            <small style="color:var(--muted);font-size:11px;margin-top:2px">Optional. Free-text — for tracking what was bought.</small>
+          </div>
+        </div>
+
+        <h4 style="margin:14px 0 8px 0;font-size:13px;color:var(--blue)">Payment</h4>
+        <div class="form-grid">
+          <div class="form-row"><label>Amount (₱) *</label><input type="number" id="w-price" value="0" step="0.01" min="0"/><small style="color:var(--muted);font-size:11px;margin-top:2px">Pre-filled from the treatment; edit freely for bargains/promos.</small></div>
+          <div class="form-row"><label>Mode of Payment</label>
+            <select id="w-method">
+              <option>Cash</option>
+              <option>GCash</option>
+              <option>Check</option>
+              <option>Bank Transfer</option>
+              <option>Card</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row"><label>Notes</label><textarea id="w-notes" placeholder="Optional — promo code, referral, check number, ref #, etc."></textarea></div>
       </div>
-      <div class="form-row"><label>Notes</label><textarea id="w-notes" placeholder="Optional — promo code, referral, check number, ref #, etc."></textarea></div>
+
     </div>
     <div class="footer">
       <button class="btn secondary" onclick="closeModal('walkin-modal')">Cancel</button>
-      <button class="btn" onclick="saveWalkin()">Save Payment</button>
+      <button class="btn" id="walkin-save-btn" onclick="saveWalkinFromCurrentTab()">Save Payment</button>
     </div>
   </div>
 </div>
