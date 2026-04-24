@@ -1044,14 +1044,24 @@ function renderSales(){
   const expenses = collectDayExpenses(date);
 
   // ---- Summary cards ----
+  // Payments come from three sources (see collectDayPayments):
+  //   - 'package'  → money applied to a client's package (Service/Comeback)
+  //   - 'purchase' → product-only rows in DB.purchases (type!=='service')
+  //   - 'walkin'   → one-off treatment rows in DB.purchases (type==='service'),
+  //                  i.e. walk-in clients who did NOT buy a package.
+  // Each of these rolls into Total Sales. Walk-in previously wasn't included
+  // even though the rows appeared in the Payments table — fixed below.
   const grossPackage = payments.filter(p=>p.kind==='package').reduce((s,p)=>s+p.amount,0);
   const grossPurchase = payments.filter(p=>p.kind==='purchase').reduce((s,p)=>s+p.amount,0);
-  const totalSales = grossPackage + grossPurchase;
+  const grossWalkin = payments.filter(p=>p.kind==='walkin').reduce((s,p)=>s+p.amount,0);
+  const walkinCount = payments.filter(p=>p.kind==='walkin').length;
+  const totalSales = grossPackage + grossPurchase + grossWalkin;
   const cardSurcharge = payments.reduce((s,p)=>s+p.surcharge,0);
   const totalExpenses = expenses.reduce((s,e)=>s+(+e.amount||0),0);
   const netProfit = totalSales - totalExpenses;
   document.getElementById('sales-summary').innerHTML = `
     <div class="stat"><div class="label">Package Payments</div><div class="value">${money(grossPackage)}</div></div>
+    <div class="stat" style="border-left-color:#f59e0b"><div class="label">Walk-in Treatments${walkinCount?` (${walkinCount})`:''}</div><div class="value">${money(grossWalkin)}</div></div>
     <div class="stat"><div class="label">Product Sales</div><div class="value">${money(grossPurchase)}</div></div>
     <div class="stat" style="border-left-color:var(--success)"><div class="label">Total Sales</div><div class="value">${money(totalSales)}</div></div>
     <div class="stat" style="border-left-color:var(--gold)"><div class="label">Card Surcharge (passthrough)</div><div class="value">${money(cardSurcharge)}</div></div>
