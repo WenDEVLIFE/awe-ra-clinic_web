@@ -490,18 +490,53 @@ function renderDashboard(){
 }
 
 // -------- Clients --------
+// Client-table sort state. null = default (alphabetical by last-name+first-name).
+// Otherwise one of 'phone' | 'address' | 'branch'. Clicking the same column
+// header twice returns to default (null). Click a different column to switch.
+let clientSort = null;
+function sortClients(col){
+  clientSort = (clientSort === col) ? null : col;
+  renderClients();
+}
+window.sortClients = sortClients;
+
 function renderClients(){
-  const br = DB.session.branch;
+  // Per round-4 item #3: client records are shared across all branches.
+  // The Client list on any branch shows every client. Dashboard's "Total
+  // Clients" still filters by homeBranch === current branch (unchanged).
   const q = (document.getElementById('client-search')?.value||'').toLowerCase();
   const filtered = DB.clients.filter(c=>{
-    if(!branchMatches(c.homeBranch, br)) return false;
     if(!q) return true;
-    // Address is now searchable too (email dropped from display; still
-    // searched in case some old clients were only findable by it).
+    // Address is also searchable (email dropped from display; still searched
+    // in case some old clients were only findable by it).
     return (c.fname+' '+c.lname+' '+(c.phone||'')+' '+(c.address||'')+' '+(c.email||'')).toLowerCase().includes(q);
   });
+
+  // ---- Apply sort ----
+  const defaultCmp = (a,b) => (a.lname||'').localeCompare(b.lname||'') || (a.fname||'').localeCompare(b.fname||'');
+  if(clientSort === 'phone'){
+    // "no-phone first, then phone clients alphabetical"
+    filtered.sort((a,b)=>{
+      const aHas = !!(a.phone && a.phone.trim());
+      const bHas = !!(b.phone && b.phone.trim());
+      if(aHas !== bHas) return aHas ? 1 : -1;   // no-phone (false) comes first
+      return defaultCmp(a,b);
+    });
+  } else if(clientSort === 'address'){
+    filtered.sort((a,b)=> (a.address||'').localeCompare(b.address||'') || defaultCmp(a,b));
+  } else if(clientSort === 'branch'){
+    filtered.sort((a,b)=> (branchName(a.homeBranch)||'').localeCompare(branchName(b.homeBranch)||'') || defaultCmp(a,b));
+  } else {
+    filtered.sort(defaultCmp);
+  }
+
   const tbl = document.getElementById('clients-table');
   if(!filtered.length){ tbl.innerHTML = '<div class="empty">No clients found. Click "+ New Client" to add one.</div>'; return; }
+
+  // Visual indicator on active sort column
+  const arrow = k => clientSort===k ? ' <span style="color:var(--blue)">▼</span>' : '';
+  const plain = '<span style="color:var(--muted);font-size:10px">↕</span>';
+
   const rows = filtered.map(c=>`<tr>
     <td><b>${esc(c.lname)}, ${esc(c.fname)}</b></td>
     <td>${esc(c.phone||'—')}</td>
@@ -512,7 +547,16 @@ function renderClients(){
       <button class="btn small secondary" onclick="openClientModal(${c.id})">Edit</button>
       <button class="btn small danger" onclick="deleteClient(${c.id})">Delete</button>
     </td></tr>`).join('');
-  tbl.innerHTML = `<table><thead><tr><th>Name</th><th>Phone</th><th>Home Branch</th><th>Address</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>`;
+  tbl.innerHTML = `<table>
+    <thead><tr>
+      <th>Name</th>
+      <th style="cursor:pointer;user-select:none" onclick="sortClients('phone')" title="Click to sort: missing-phone first. Click again for default.">Phone ${clientSort==='phone' ? arrow('phone') : plain}</th>
+      <th style="cursor:pointer;user-select:none" onclick="sortClients('branch')" title="Click to sort by home branch. Click again for default.">Home Branch ${clientSort==='branch' ? arrow('branch') : plain}</th>
+      <th style="cursor:pointer;user-select:none" onclick="sortClients('address')" title="Click to sort alphabetically by address. Click again for default.">Address ${clientSort==='address' ? arrow('address') : plain}</th>
+      <th>Actions</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
 }
 
 // Populate the two <datalist> dropdowns with names already entered
@@ -535,10 +579,10 @@ function openClientModal(id){
   fillStaffDatalists();
   if(id){
     const c = DB.clients.find(x=>x.id===id);
-    if(!c || !branchMatches(c.homeBranch, DB.session.branch)){
-      alert('You can only edit clients from the current branch.');
-      return;
-    }
+    if(!c){ alert('Client not found.'); return; }
+    // Clients are shared across branches (round 4); editing is allowed on
+    // any client from any branch. The Home Branch select in the form lets
+    // you correct a client's primary branch if needed.
     document.getElementById('client-modal-title').textContent = 'Edit Client';
     document.getElementById('client-id').value = c.id;
     document.getElementById('c-fname').value = c.fname||'';
@@ -605,12 +649,14 @@ function saveClient(){
   renderClients();
 }
 function deleteClient(id){
-  if(!confirm('Delete this client? Their appointments will remain but show "Unknown client".')) return;
   const c = DB.clients.find(x=>x.id===id);
-  if(!c || !branchMatches(c.homeBranch, DB.session.branch)){
-    alert('You can only delete clients from the current branch.');
-    return;
-  }
+  if(!c){ alert('Client not found.'); return; }
+  // Clients are shared across branches (round 4). We show the client's home
+  // branch in the confirmation so the user doesn't accidentally delete
+  // someone registered to the other location.
+  const branchTag = branchMatches(c.homeBranch, DB.session.branch)
+    ? '' : ` (home branch: ${branchName(c.homeBranch)})`;
+  if(!confirm(`Delete ${c.fname} ${c.lname}${branchTag}? Their appointments will remain but show "Unknown client".`)) return;
   DB.clients = DB.clients.filter(x=>x.id!==id);
   // Sync to Firestore if available
   if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
@@ -646,11 +692,11 @@ function clientBalance(clientId){
 function viewClient(id){
   currentClientViewId = id;
   const c = DB.clients.find(x=>x.id===id);
-  if(!c || !branchMatches(c.homeBranch, DB.session.branch)){
-    alert('You can only view clients from the current branch.');
-    return;
-  }
-  const history = DB.appointments.filter(a=>a.clientId===id && branchMatches(a.branch, DB.session.branch)).sort((a,b)=>b.date.localeCompare(a.date));
+  if(!c){ alert('Client not found.'); return; }
+  // Client records are shared across branches (round 4). Appointment
+  // history is shown for ALL branches so receptionists at either location
+  // can see the client's full history at a glance.
+  const history = DB.appointments.filter(a=>a.clientId===id).sort((a,b)=>b.date.localeCompare(a.date));
   const histRows = history.length ? history.map(a=>`<tr><td>${fmtDate(a.date)} ${fmtTime(a.time)}</td><td>${esc(a.service||'')}</td><td>${esc(branchName(a.branch))}</td><td>${esc(a.status)}</td></tr>`).join('') : '<tr><td colspan="4" style="text-align:center;color:var(--muted)">No appointment history</td></tr>';
 
   const bal = clientBalance(id);
@@ -1202,7 +1248,12 @@ function renderCalendar(){
     const apptHtml = dayAppts.slice(0,3).map(a=>{
       const c = findClientById(a.clientId);
       const name = c ? c.fname : '?';
-      return `<div class="appt" title="${esc(fmtTime(a.time)+' '+(c?c.fname+' '+c.lname:'')+' - '+(a.service||''))}" onclick="event.stopPropagation();openApptModal(${a.id})">${fmtTime(a.time)} ${esc(name)}</div>`;
+      // Per user request: clicking anywhere in the cell (including on these
+      // appointment pills) should ONLY open the day's list popup. Edit is
+      // only reachable via the explicit Edit button inside that popup. So
+      // the pill itself carries no onclick — the click bubbles up to the
+      // parent .cal-cell which calls openDayScheduleModal(ds).
+      return `<div class="appt" title="${esc(fmtTime(a.time)+' '+(c?c.fname+' '+c.lname:'')+' - '+(a.service||''))}">${fmtTime(a.time)} ${esc(name)}</div>`;
     }).join('');
     const more = dayAppts.length>3 ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">+${dayAppts.length-3} more</div>` : '';
     html += `<div class="cal-cell ${ds===today?'today':''}" onclick="openDayScheduleModal('${ds}')"><div class="d">${d}</div>${apptHtml}${more}</div>`;
@@ -1528,13 +1579,53 @@ function deleteAppt(){
 }
 
 // -------- Inventory --------
+// Inventory-table sort state. null = default (by item name alphabetical).
+// Click a column header once to activate that sort, click again to go back
+// to default. Same pattern as clientSort.
+let invSort = null;
+function sortInventory(col){
+  invSort = (invSort === col) ? null : col;
+  renderInventory();
+}
+window.sortInventory = sortInventory;
+
 function renderInventory(){
   const br = DB.session.branch;
   document.getElementById('inv-branch-name').textContent = branchName(br);
   const q = (document.getElementById('inv-search')?.value||'').toLowerCase();
   const items = DB.inventory.filter(i=>branchMatches(i.branch, br) && (!q||i.name.toLowerCase().includes(q)||(i.category||'').toLowerCase().includes(q)));
+
+  // ---- Status rank helper (most urgent first when sorting by status) ----
+  const statusRank = i => {
+    if(i.qty === 0) return 0;                 // Out
+    if(i.qty <= i.reorder) return 1;          // Low
+    return 2;                                 // OK
+  };
+  const defaultCmp = (a,b) => (a.name||'').localeCompare(b.name||'');
+  if(invSort === 'category'){
+    items.sort((a,b)=> (a.category||'').localeCompare(b.category||'') || defaultCmp(a,b));
+  } else if(invSort === 'qty'){
+    items.sort((a,b)=> (+a.qty||0) - (+b.qty||0) || defaultCmp(a,b));
+  } else if(invSort === 'reorder'){
+    items.sort((a,b)=> (+a.reorder||0) - (+b.reorder||0) || defaultCmp(a,b));
+  } else if(invSort === 'cost'){
+    items.sort((a,b)=> (+a.cost||0) - (+b.cost||0) || defaultCmp(a,b));
+  } else if(invSort === 'price'){
+    items.sort((a,b)=> (+a.price||0) - (+b.price||0) || defaultCmp(a,b));
+  } else if(invSort === 'status'){
+    items.sort((a,b)=> statusRank(a) - statusRank(b) || defaultCmp(a,b));
+  } else {
+    items.sort(defaultCmp);
+  }
+
   const el = document.getElementById('inv-table');
   if(!items.length){ el.innerHTML = '<div class="empty">No inventory items. Click "+ New Item" to add one.</div>'; return; }
+
+  // Visual indicator on active sort column
+  const arr  = '<span style="color:var(--blue)">▼</span>';
+  const none = '<span style="color:var(--muted);font-size:10px">↕</span>';
+  const ind = k => invSort===k ? arr : none;
+
   const rows = items.map(i=>{
     const status = i.qty===0 ? '<span class="pill bad">Out</span>' : i.qty<=i.reorder ? '<span class="pill warn">Low</span>' : '<span class="pill ok">OK</span>';
     return `<tr>
@@ -1556,7 +1647,19 @@ function renderInventory(){
       </td>
     </tr>`;
   }).join('');
-  el.innerHTML = `<table><thead><tr><th>Item</th><th>Category</th><th>On Hand</th><th>Reorder</th><th>Cost</th><th>Price</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>`;
+  el.innerHTML = `<table>
+    <thead><tr>
+      <th>Item</th>
+      <th style="cursor:pointer;user-select:none" onclick="sortInventory('category')" title="Click to sort by category. Click again for default.">Category ${ind('category')}</th>
+      <th style="cursor:pointer;user-select:none" onclick="sortInventory('qty')" title="Click to sort by on-hand quantity (lowest first). Click again for default.">On Hand ${ind('qty')}</th>
+      <th style="cursor:pointer;user-select:none" onclick="sortInventory('reorder')" title="Click to sort by reorder threshold. Click again for default.">Reorder ${ind('reorder')}</th>
+      <th style="cursor:pointer;user-select:none" onclick="sortInventory('cost')" title="Click to sort by cost. Click again for default.">Cost ${ind('cost')}</th>
+      <th style="cursor:pointer;user-select:none" onclick="sortInventory('price')" title="Click to sort by price. Click again for default.">Price ${ind('price')}</th>
+      <th style="cursor:pointer;user-select:none" onclick="sortInventory('status')" title="Click to sort by stock status: Out → Low → OK. Click again for default.">Status ${ind('status')}</th>
+      <th>Actions</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
 }
 function adjustQty(id, delta){
   const it = DB.inventory.find(x=>x.id===id);
@@ -2609,32 +2712,372 @@ function savePayment(){
 // or listener in firestore-layer.js. collectDayPayments tags these as
 // kind:'walkin' for badge rendering in Sales.
 
-function openWalkinModal(){
-  // Reset form
-  ['w-fname','w-lname','w-phone','w-address','w-product','w-notes'].forEach(i=>{
-    const el = document.getElementById(i); if(el) el.value = '';
-  });
-  const priceEl = document.getElementById('w-price');
-  if(priceEl) priceEl.value = 0;
-  const methodEl = document.getElementById('w-method');
-  if(methodEl) methodEl.value = 'Cash';
+// Round-4 rework: the Add Payment modal now has TWO modes, Existing vs New.
+// These two module-level variables track the current mode and the selected
+// existing client (if any).
+let currentWalkinMode = 'existing';
+let selectedWalkinClientId = null;
 
-  // Populate treatment dropdown from catalog (services for the current branch).
-  // Keep it optional — default to the "— none —" row so user can record a
-  // product-only payment without picking a service.
-  const sel = document.getElementById('w-service');
-  if(sel){
-    const treatments = (DB.treatments||[]).slice()
-      .sort((a,b)=>(a.name||'').localeCompare(b.name||''));
-    sel.innerHTML = '<option value="">— none —</option>' +
-      treatments.map(t =>
-        `<option value="${String(t.id)}" data-price="${+t.pricePerSession||0}">${esc(t.name)} (${money(+t.pricePerSession||0)})</option>`
-      ).join('');
-    sel.value = '';
+function openWalkinModal(){
+  console.log('[Awe-Ra] openWalkinModal called');
+  try {
+    const backdrop = document.getElementById('walkin-modal');
+    if(!backdrop){
+      console.error('[Awe-Ra] #walkin-modal not found in DOM. The deployed index.html is stale.');
+      alert('The "Add Payment" modal is missing from this page.\n\n' +
+            'Hard-refresh (Ctrl-Shift-R / Cmd-Shift-R). If that fails, redeploy index.html.');
+      return;
+    }
+    if(typeof openModal !== 'function'){
+      alert('Internal error: openModal helper is missing. Hard-refresh the page.');
+      return;
+    }
+    // Default to Existing Client tab
+    selectedWalkinClientId = null;
+    // Clear new-client fields (in case user toggles to New tab)
+    ['w-fname','w-lname','w-phone','w-address','w-product','w-notes'].forEach(i=>{
+      const el = document.getElementById(i); if(el) el.value = '';
+    });
+    const priceEl = document.getElementById('w-price'); if(priceEl) priceEl.value = 0;
+    const methodEl = document.getElementById('w-method'); if(methodEl) methodEl.value = 'Cash';
+    // Clear existing-client state
+    const srch = document.getElementById('walkin-search'); if(srch) srch.value = '';
+    const results = document.getElementById('walkin-search-results'); if(results) results.innerHTML = '';
+    const selPanel = document.getElementById('walkin-selected-client'); if(selPanel) selPanel.style.display = 'none';
+
+    switchWalkinTab('existing');
+    openModal('walkin-modal');
+    console.log('[Awe-Ra] openWalkinModal: opened ok');
+  } catch (e) {
+    console.error('[Awe-Ra] openWalkinModal failed:', e);
+    alert('Could not open the Add Payment modal: ' + (e && e.message || e));
   }
-  openModal('walkin-modal');
 }
 window.openWalkinModal = openWalkinModal;
+
+// Switch between the Existing-Client and New-Client tabs.
+function switchWalkinTab(mode){
+  try {
+    const exEl = document.getElementById('walkin-existing-section');
+    const newEl = document.getElementById('walkin-new-section');
+    const exBtn = document.getElementById('walkin-tab-existing');
+    const newBtn = document.getElementById('walkin-tab-new');
+    if(!exEl || !newEl){ console.error('walkin tab sections missing'); return; }
+    currentWalkinMode = (mode === 'new') ? 'new' : 'existing';
+    if(currentWalkinMode === 'new'){
+      newEl.style.display = '';
+      exEl.style.display = 'none';
+      if(newBtn) newBtn.classList.remove('secondary');
+      if(exBtn) exBtn.classList.add('secondary');
+      populateWalkinServiceDropdown('w-service');
+    } else {
+      exEl.style.display = '';
+      newEl.style.display = 'none';
+      if(exBtn) exBtn.classList.remove('secondary');
+      if(newBtn) newBtn.classList.add('secondary');
+      populateWalkinServiceDropdown('walkin-oneoff-svc');
+    }
+  } catch(e){
+    console.error('switchWalkinTab failed:', e);
+  }
+}
+window.switchWalkinTab = switchWalkinTab;
+
+// Populate a <select> (by id) with the services catalog. Used by both tabs.
+function populateWalkinServiceDropdown(selectId){
+  const sel = document.getElementById(selectId);
+  if(!sel) return;
+  const list = (window.DB && Array.isArray(DB.treatments)) ? DB.treatments.slice() : [];
+  list.sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  sel.innerHTML = '<option value="">— none —</option>' +
+    list.map(t =>
+      `<option value="${String(t.id)}" data-price="${+t.pricePerSession||0}">${esc(t.name)} (${money(+t.pricePerSession||0)})</option>`
+    ).join('');
+  sel.value = '';
+}
+
+// ---- Existing-client search ----
+// Filters DB.clients by name/phone. Cross-branch (round 4) — no branch
+// filter applied. Shows up to ~12 results.
+function searchWalkinClients(){
+  const q = (document.getElementById('walkin-search').value||'').trim().toLowerCase();
+  const out = document.getElementById('walkin-search-results');
+  if(!out) return;
+  // When the search is empty OR the search box currently holds the
+  // "Lname, Fname" we auto-filled after selection, don't re-render results.
+  if(!q){ out.innerHTML = ''; return; }
+  const matches = (DB.clients||[]).filter(c => {
+    const hay = (c.fname+' '+c.lname+' '+(c.phone||'')+' '+(c.address||'')).toLowerCase();
+    return hay.includes(q);
+  }).slice(0, 12);
+  if(!matches.length){
+    out.innerHTML = '<div style="padding:10px;color:var(--muted);font-size:12px;background:var(--blue-ghost);border-radius:4px">No matching clients. Switch to the <b>New Client</b> tab to register a new one.</div>';
+    // Hide selected panel if we had one loaded previously
+    const panel = document.getElementById('walkin-selected-client');
+    if(panel) panel.style.display = 'none';
+    selectedWalkinClientId = null;
+    return;
+  }
+  out.innerHTML = matches.map(c => {
+    return `<div style="cursor:pointer;padding:8px 10px;border:1px solid var(--border-blue);border-radius:4px;margin-bottom:4px;background:#fff" onclick="selectWalkinClient(${JSON.stringify(String(c.id))})" onmouseover="this.style.background='var(--blue-ghost)'" onmouseout="this.style.background='#fff'">
+      <div style="font-weight:600">${esc(c.lname)}, ${esc(c.fname)}</div>
+      <div style="font-size:11px;color:var(--muted)">${esc(c.phone||'no phone')} · ${esc(branchName(c.homeBranch))} · ${esc(c.address||'no address')}</div>
+    </div>`;
+  }).join('');
+}
+window.searchWalkinClients = searchWalkinClients;
+
+// Loads the picked client's info + active packages into the inline panel.
+function selectWalkinClient(clientId){
+  try {
+    const id = String(clientId);
+    const c = (DB.clients||[]).find(x => String(x.id) === id);
+    if(!c){ alert('Client not found.'); return; }
+    selectedWalkinClientId = c.id;
+    // Collapse results, prefill search box
+    document.getElementById('walkin-search-results').innerHTML = '';
+    document.getElementById('walkin-search').value = c.lname + ', ' + c.fname;
+
+    const panel = document.getElementById('walkin-selected-client');
+    panel.style.display = '';
+
+    // Client info header
+    const activePkgs = (DB.packages||[]).filter(p => String(p.clientId) === String(c.id) && p.status === 'Active');
+    let pkgLines = '';
+    if(activePkgs.length){
+      pkgLines = '<div style="margin-top:6px;font-size:12px"><b>Active packages:</b><ul style="margin:4px 0;padding-left:18px">' +
+        activePkgs.map(p=>{
+          const s = pkgStats(p);
+          return `<li>${esc(p.packageName)} — ${s.sessionsUsed}/${p.totalSessions} availed, ${s.sessionsPaid} paid, balance ${money(s.balance)}</li>`;
+        }).join('') + '</ul></div>';
+    } else {
+      pkgLines = '<div style="margin-top:6px;font-size:12px;color:var(--muted)">No active packages. Payment will be recorded as a one-off service / product charge.</div>';
+    }
+    document.getElementById('walkin-client-info').innerHTML = `
+      <div><b>${esc(c.fname)} ${esc(c.lname)}</b></div>
+      <div style="font-size:12px;color:var(--muted)">${esc(c.phone||'no phone')} · ${esc(c.address||'no address')} · Home: ${esc(branchName(c.homeBranch))}</div>
+      ${pkgLines}
+    `;
+
+    // Apply-To dropdown: one-off + each active package
+    const applySel = document.getElementById('walkin-apply-to');
+    applySel.innerHTML = '<option value="oneoff">One-off service / product payment</option>' +
+      activePkgs.map(p=>{
+        const s = pkgStats(p);
+        return `<option value="pkg:${String(p.id)}">Package: ${esc(p.packageName)} (${s.sessionsUsed}/${p.totalSessions} availed, balance ${money(s.balance)})</option>`;
+      }).join('');
+    applySel.value = 'oneoff';
+
+    // Reset payment inputs
+    document.getElementById('walkin-exist-amount').value = 0;
+    document.getElementById('walkin-exist-method').value = 'Cash';
+    document.getElementById('walkin-exist-notes').value = '';
+    document.getElementById('walkin-oneoff-product').value = '';
+    const svcSel = document.getElementById('walkin-oneoff-svc');
+    if(svcSel) svcSel.value = '';
+    onWalkinApplyToChange();
+  } catch(e){
+    console.error('selectWalkinClient failed:', e);
+    alert('Could not load that client: ' + (e && e.message || e));
+  }
+}
+window.selectWalkinClient = selectWalkinClient;
+
+// Show/hide the one-off fields when the user flips the Apply-To dropdown.
+function onWalkinApplyToChange(){
+  const v = document.getElementById('walkin-apply-to').value;
+  const oneoffWrap = document.getElementById('walkin-oneoff-fields');
+  if(v === 'oneoff'){
+    if(oneoffWrap) oneoffWrap.style.display = '';
+  } else {
+    if(oneoffWrap) oneoffWrap.style.display = 'none';
+  }
+  updateWalkinSplitPreview();
+}
+window.onWalkinApplyToChange = onWalkinApplyToChange;
+
+// When the user picks a service inside the Existing-Client one-off flow,
+// pre-fill the Amount from the service's per-session price.
+function onWalkinExistServiceChange(){
+  const sel = document.getElementById('walkin-oneoff-svc');
+  const priceEl = document.getElementById('walkin-exist-amount');
+  if(!sel || !priceEl) return;
+  const opt = sel.options[sel.selectedIndex];
+  const price = opt ? +opt.getAttribute('data-price') || 0 : 0;
+  if(price > 0) priceEl.value = price;
+  updateWalkinSplitPreview();
+}
+window.onWalkinExistServiceChange = onWalkinExistServiceChange;
+
+// Live preview of the split when the user picks a package + enters amount.
+function updateWalkinSplitPreview(){
+  const infoEl = document.getElementById('walkin-split-info');
+  if(!infoEl) return;
+  const v = document.getElementById('walkin-apply-to').value;
+  if(v === 'oneoff'){ infoEl.style.display = 'none'; return; }
+  const pkgId = v.replace(/^pkg:/, '');
+  const pkg = (DB.packages||[]).find(p => String(p.id) === pkgId);
+  if(!pkg){ infoEl.style.display = 'none'; return; }
+  const amount = +document.getElementById('walkin-exist-amount').value || 0;
+  const availed = (pkg.sessions||[]).length;
+  const paid = computeSessionsPaid(pkg);
+  const unpaidAvailed = Math.max(0, availed - paid);
+  infoEl.style.display = '';
+  if(amount <= 0){
+    infoEl.innerHTML = '<b>Heads up:</b> enter an amount to see the per-session breakdown.';
+    return;
+  }
+  if(unpaidAvailed === 0){
+    infoEl.innerHTML = `<b>No unpaid availed sessions.</b> All ${availed} availed sessions are already paid. ${money(amount)} will be recorded as a single <b>Additional</b> payment dated today (applies toward package balance / future sessions).`;
+    return;
+  }
+  const perSession = amount / unpaidAvailed;
+  const sessionsSorted = (pkg.sessions||[]).slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  const unpaidSessions = sessionsSorted.slice(paid, paid + unpaidAvailed);
+  const dates = unpaidSessions.map(s => s.date || '?').join(', ');
+  infoEl.innerHTML =
+    `<b>Split preview:</b> ${money(amount)} ÷ ${unpaidAvailed} unpaid availed session${unpaidAvailed===1?'':'s'} = <b>${money(perSession)} per session</b>.<br/>` +
+    `${unpaidAvailed} payment record${unpaidAvailed===1?'':'s'} will be created, one per session, dated to: ${esc(dates)}.<br/>` +
+    `<span style="color:#78350f">These will NOT appear on today's Sales page — they land on those past session dates. Pick <b>One-off service / product payment</b> instead if you want today's Sales to reflect this.</span>`;
+}
+window.updateWalkinSplitPreview = updateWalkinSplitPreview;
+
+// Save dispatcher — called by the single "Save Payment" footer button.
+function saveWalkinFromCurrentTab(){
+  if(currentWalkinMode === 'new'){
+    saveWalkin();
+  } else {
+    saveExistingWalkinPayment();
+  }
+}
+window.saveWalkinFromCurrentTab = saveWalkinFromCurrentTab;
+
+// Handle the Existing-Client Save. Two sub-flows:
+//  • Apply-To = oneoff → single DB.purchases row (type:'service'), dated today.
+//  • Apply-To = pkg:<id> → split evenly across the unpaid-availed sessions,
+//    each payment dated to the matching session.date.
+function saveExistingWalkinPayment(){
+  try {
+    const c = (DB.clients||[]).find(x => String(x.id) === String(selectedWalkinClientId));
+    if(!c){ alert('No client selected. Search and click a client first.'); return; }
+    const applyTo = document.getElementById('walkin-apply-to').value;
+    const amount = +document.getElementById('walkin-exist-amount').value || 0;
+    const method = document.getElementById('walkin-exist-method').value || 'Cash';
+    const notes = document.getElementById('walkin-exist-notes').value || '';
+    if(amount <= 0){ alert('Amount must be greater than 0.'); return; }
+
+    if(applyTo === 'oneoff'){
+      const svcId = (document.getElementById('walkin-oneoff-svc').value||'').trim();
+      const product = (document.getElementById('walkin-oneoff-product').value||'').trim();
+      if(!svcId && !product){
+        alert('For a one-off payment, fill in either a Treatment or a Product.');
+        return;
+      }
+      const svc = svcId ? (DB.treatments||[]).find(t => String(t.id) === String(svcId)) : null;
+      const descParts = [];
+      if(svc) descParts.push(svc.name);
+      if(product) descParts.push('Product: ' + product);
+      const description = descParts.join(' + ') || 'Walk-in payment';
+      const rec = {
+        id: nextId('purchase'),
+        type: 'service',
+        clientId: c.id,
+        clientName: c.fname + ' ' + c.lname,
+        branch: DB.session.branch,
+        date: todayStr(),
+        itemName: description,
+        treatmentId: svc ? svc.id : null,
+        productText: product,
+        qty: 1,
+        unitPrice: amount,
+        total: amount,
+        method,
+        paid: true,
+        surcharge: 0,
+        surchargeWaived: false,
+        ref: '',
+        notes,
+        createdAt: new Date().toISOString(),
+        createdBy: (firebase.auth().currentUser && firebase.auth().currentUser.uid) || 'system'
+      };
+      DB.purchases = DB.purchases || [];
+      DB.purchases.push(rec);
+      if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD){
+        window.FirestoreCRUD.add('purchases', rec).catch(err => console.error('Firestore purchase add error:', err));
+      }
+      saveData();
+      closeModal('walkin-modal');
+      if(currentPage === 'sales') renderSales();
+      if(currentPage === 'clients') renderClients();
+      if(currentPage === 'dashboard') renderDashboard();
+      alert('One-off payment recorded for ' + c.fname + ' ' + c.lname + '.');
+      return;
+    }
+
+    // Package payment flow
+    const pkgId = applyTo.replace(/^pkg:/, '');
+    const pkg = (DB.packages||[]).find(p => String(p.id) === pkgId);
+    if(!pkg){ alert('Package not found. It may have been deleted — re-open the modal.'); return; }
+    const availed = (pkg.sessions||[]).length;
+    const paid = computeSessionsPaid(pkg);
+    const unpaidAvailed = Math.max(0, availed - paid);
+
+    pkg.payments = pkg.payments || [];
+    let msg;
+    if(unpaidAvailed === 0){
+      // All availed sessions already paid → single "Additional" payment today.
+      pkg.payments.push({
+        id: nextId('payment'),
+        date: todayStr(),
+        amount,
+        surcharge: 0,
+        surchargeWaived: false,
+        type: 'Additional',
+        method,
+        ref: '',
+        notes: notes || 'Recorded via Sales › + Add Payment (no unpaid-availed sessions).',
+        branch: DB.session.branch
+      });
+      msg = `${money(amount)} recorded as an Additional payment on ${pkg.packageName}.`;
+    } else {
+      // Split evenly across the N unpaid-availed sessions.
+      const perSession = +(amount / unpaidAvailed).toFixed(2);
+      const sessionsSorted = (pkg.sessions||[]).slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+      const unpaidSessions = sessionsSorted.slice(paid, paid + unpaidAvailed);
+      unpaidSessions.forEach((s, idx) => {
+        pkg.payments.push({
+          id: nextId('payment'),
+          date: s.date || todayStr(),
+          amount: perSession,
+          surcharge: 0,
+          surchargeWaived: false,
+          type: 'Session Payment',
+          method,
+          ref: '',
+          notes: (notes ? notes + ' — ' : '') +
+                 `Split ${idx+1}/${unpaidAvailed} of ${money(amount)} across availed sessions (recorded via Sales › + Add Payment on ${todayStr()})`,
+          branch: DB.session.branch
+        });
+      });
+      msg = `${money(amount)} split across ${unpaidAvailed} availed session${unpaidAvailed===1?'':'s'} (${money(perSession)} each) on ${pkg.packageName}. These payments are dated to the session dates, NOT today — today's Sales page won't show them.`;
+    }
+
+    refreshPkgSessionsPaid(pkg);
+    if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD){
+      window.FirestoreCRUD.update('packages', String(pkg.id), pkg).catch(err => console.error('Firestore pkg update error:', err));
+    }
+    saveData();
+    closeModal('walkin-modal');
+    if(currentPage === 'sales') renderSales();
+    if(currentPage === 'packages') renderPackages();
+    if(currentPage === 'dashboard') renderDashboard();
+    alert(msg);
+  } catch(e){
+    console.error('saveExistingWalkinPayment failed:', e);
+    alert('Could not save payment: ' + (e && e.message || e));
+  }
+}
+window.saveExistingWalkinPayment = saveExistingWalkinPayment;
 
 // When user picks a treatment, auto-fill Amount from that service's price.
 // Leaves it editable for bargains/promos — the user's sample report showed
@@ -2682,10 +3125,13 @@ function saveWalkin(){
     // the new values are non-empty and different. If not found, create
     // a new client and sync to Firestore.
     const norm = s => (s||'').trim().toLowerCase();
+    // Round 4: clients are shared across branches, so dedup by name only.
+    // If the user typed a name that already exists on ANY branch, reuse
+    // that client instead of silently creating a duplicate under the
+    // current branch.
     let client = (DB.clients||[]).find(c =>
       norm(c.fname) === norm(fname) &&
-      norm(c.lname) === norm(lname) &&
-      branchMatches(c.homeBranch, branch)
+      norm(c.lname) === norm(lname)
     );
     if(!client){
       client = {
