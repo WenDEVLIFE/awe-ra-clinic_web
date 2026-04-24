@@ -618,12 +618,22 @@ window.FirestoreCRUD = {
       }
       const id = String(docId);
       const db = firebase.firestore();
-      await db.collection(collection).doc(id).set({
+      // Preserve the original type of `data.id`. The round-3 patch forced
+      // `id` here to the stringified doc key, which meant every update
+      // silently converted numeric ids (e.g. 8) into their string form
+      // ("8") inside the stored document. The app's strict-equality finds
+      // (`DB.packages.find(x => x.id === pkgId)`) then missed those docs
+      // after the next snapshot, causing payments added via the Package
+      // detail modal to "not reflect" on newer packages — the exact
+      // Round-5 bug user reported. Keep data.id as-is, and only backfill
+      // when truly missing.
+      const payload = {
         ...data,
-        id,                  // guarantee the data-field id matches the doc id
         updatedAt: new Date(),
         updatedBy: firebase.auth().currentUser?.uid || 'system'
-      }, { merge: true });
+      };
+      if (payload.id == null || payload.id === '') payload.id = id;
+      await db.collection(collection).doc(id).set(payload, { merge: true });
       console.log(`✅ Updated ${collection}/${id}`);
       return { success: true };
     } catch (error) {
