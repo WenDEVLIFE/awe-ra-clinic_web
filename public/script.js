@@ -274,6 +274,14 @@ function requireAdminPassword(reason){
 }
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
+// Build a JS string literal suitable for embedding inside a DOUBLE-quoted
+// HTML attribute like `onclick="fn(${idArg(x)})"`. JSON.stringify wraps the
+// value in raw double-quotes, which would terminate the attribute prematurely
+// in the browser; escape the outer quotes to &quot; so the attribute parses,
+// then the browser decodes &quot; back to " when reading the JS expression.
+// This is the reason Delete/Edit/Select-client buttons were silently dying —
+// the inline handler HTML was malformed for Firestore-assigned string ids.
+function idArg(v){ return JSON.stringify(String(v==null?'':v)).replace(/"/g,'&quot;'); }
 function fmtDate(s){ if(!s) return ''; const d=new Date(s+'T00:00'); return d.toLocaleDateString('en-US',{year:'numeric',month:'short',day:'numeric'}); }
 function fmtTime(t){ if(!t) return ''; const [h,m]=t.split(':'); const hh=((+h+11)%12)+1; const ap=+h>=12?'PM':'AM'; return `${hh}:${m} ${ap}`; }
 function slugifyBranch(val){
@@ -1093,7 +1101,7 @@ function renderSales(){
       // purchases from the Packages / Inventory workflow; deleting those
       // would be a bigger cascade. Walk-ins are self-contained.
       const actionsCell = p.kind==='walkin'
-        ? `<button class="btn small danger" onclick="deleteWalkin(${JSON.stringify(String(p.purchaseId))})">Delete</button>`
+        ? `<button class="btn small danger" onclick="deleteWalkin(${idArg(p.purchaseId)})">Delete</button>`
         : '';
       return `<tr>
         <td>${sourceTag}</td>
@@ -1373,14 +1381,17 @@ function openDayScheduleModal(ds){
         // JSON.stringify safely escapes the id whether it's a number or a
         // Firestore-generated string like "ab12Cd" — so the inline onclick
         // always parses even on Safari's stricter quote handling.
-        const idArg = JSON.stringify(String(a.id));
+        // Use htmlsafe idArg helper (escapes the outer " so it survives inside
+        // a double-quoted onclick attribute). Local var named `ida` to avoid
+        // shadowing the top-level idArg() helper.
+        const ida = idArg(a.id);
         return `<tr>
           <td><b>${fmtTime(a.time)}</b></td>
           <td>${clientLbl}</td>
           <td>${esc(a.service||'')}</td>
           <td>${esc(a.therapist||'')}</td>
           <td><span class="pill ${statusClass}">${esc(a.status||'Booked')}</span></td>
-          <td><button class="btn small secondary" onclick="editApptFromDayModal(${idArg})">Edit</button></td>
+          <td><button class="btn small secondary" onclick="editApptFromDayModal(${ida})">Edit</button></td>
         </tr>`;
       }).join('');
       body.innerHTML = `
@@ -1475,9 +1486,12 @@ function saveAppt(){
   };
   let apptId;
   if(id){
-    apptId = +id;
-    const idx = DB.appointments.findIndex(x=>x.id==id);
-    DB.appointments[idx] = {...DB.appointments[idx], ...rec};
+    // Preserve string ids for Firestore-assigned doc keys — `+id` would
+    // become NaN for those, which silently broke the update path.
+    apptId = /^\d+$/.test(String(id)) ? +id : String(id);
+    const idx = DB.appointments.findIndex(x => String(x.id) === String(id));
+    if(idx < 0){ alert('Appointment not found. Close and reopen the modal.'); return; }
+    DB.appointments[idx] = {...DB.appointments[idx], ...rec, id: apptId};
     // Sync to Firestore if available
     if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
       window.FirestoreCRUD.update('appointments', String(apptId), rec).catch(err => console.error("Firestore update error:", err));
@@ -1560,24 +1574,38 @@ function syncApptToPackage(apptId){
   }
 }
 function deleteAppt(){
-  const id = +document.getElementById('appt-id').value;
+  // Read the raw id without numeric coercion — Firestore-assigned ids are
+  // strings (e.g. "abc123"), and `+id` on those becomes NaN, which silently
+  // skipped every filter below. Compare via String() everywhere.
+  const raw = document.getElementById('appt-id').value;
+  if(!raw){ alert('No appointment selected.'); return; }
+  const id = String(raw);
   if(!confirm('Delete this appointment? If it logged a package session, that session and its supply deduction will be reversed.')) return;
   // Remove any package session that came from this appt and restore supplies
+  const touchedPkgIds = new Set();
   DB.packages.forEach(p=>{
     if(!p.sessions) return;
+    const before = p.sessions.length;
     p.sessions = p.sessions.filter(s=>{
-      if(s.apptId!==id) return true;
+      if(String(s.apptId) !== id) return true;
       const toRestore = Array.isArray(s.supplies) && s.supplies.length
         ? s.supplies
         : snapshotTreatmentSupplies(p.treatmentId);
       applyStockChange(p.branch, toRestore, -1);
       return false;
     });
+    if(p.sessions.length !== before) touchedPkgIds.add(p.id);
   });
-  DB.appointments = DB.appointments.filter(x=>x.id!==id);
+  DB.appointments = DB.appointments.filter(x => String(x.id) !== id);
   // Sync to Firestore if available
   if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
-    window.FirestoreCRUD.delete('appointments', String(id)).catch(err => console.error("Firestore delete error:", err));
+    window.FirestoreCRUD.delete('appointments', id).catch(err => console.error("Firestore delete error:", err));
+    // Also persist the mutated packages so the reversed session doesn't come
+    // back from the next snapshot.
+    touchedPkgIds.forEach(pid => {
+      const p = DB.packages.find(x=>x.id===pid);
+      if(p) window.FirestoreCRUD.update('packages', String(pid), p).catch(err => console.error("Firestore pkg update error:", err));
+    });
   }
   saveData();
   closeModal('appt-modal');
@@ -1586,6 +1614,7 @@ function deleteAppt(){
   renderDashboard();
   updateUpcomingBadge();
   if(currentPage==='upcoming') renderUpcoming();
+  if(currentPage==='packages') renderPackages();
 }
 
 // -------- Inventory --------
@@ -2258,7 +2287,8 @@ function openPkgModal(id, prefillClientId){
   document.getElementById('p-branch').value = branchName(DB.session.branch);
   const lockedNote = document.getElementById('p-locked-note');
   if(id){
-    const p = DB.packages.find(x=>x.id===id);
+    const p = DB.packages.find(x => String(x.id) === String(id));
+    if(!p){ alert('Package not found.'); return; }
     document.getElementById('pkg-modal-title').textContent = 'Edit Package';
     document.getElementById('pkg-id').value = p.id;
     document.getElementById('p-client').value = p.clientId;
@@ -2352,15 +2382,23 @@ function savePkg(){
     notes: document.getElementById('p-notes').value
   };
   if(id){
-    const idx = DB.packages.findIndex(x=>x.id==id);
-    // Preserve priceLocked and existing sub-records
+    // String-match so Firestore-string ids also find their row.
+    const idx = DB.packages.findIndex(x => String(x.id) === String(id));
+    if(idx < 0){ alert('Package not found.'); return; }
+    // Preserve priceLocked and existing sub-records (including .payments and
+    // .sessions — DO NOT overwrite them by spreading rec on top, since rec
+    // doesn't include them).
     rec.priceLocked = DB.packages[idx].priceLocked || downpayment>0;
-    DB.packages[idx] = {...DB.packages[idx], ...rec};
+    const merged = {...DB.packages[idx], ...rec};
+    DB.packages[idx] = merged;
     // Auto-recompute sessionsPaid based on existing payments + current price
-    refreshPkgSessionsPaid(DB.packages[idx]);
-    // Sync to Firestore if available
+    refreshPkgSessionsPaid(merged);
+    // Sync to Firestore — write the FULL merged object, not just `rec`. `rec`
+    // is missing payments/sessions, and our set({merge:true}) would leave
+    // those untouched on the server — but we should still push the full
+    // shape for consistency with the snapshot that will come back.
     if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
-      window.FirestoreCRUD.update('packages', String(id), rec).catch(err => console.error("Firestore update error:", err));
+      window.FirestoreCRUD.update('packages', String(merged.id), merged).catch(err => console.error("Firestore update error:", err));
     }
   } else {
     rec.id = nextId('pkg');
@@ -2405,12 +2443,16 @@ function savePkg(){
 }
 
 function deletePkg(){
-  const id = +document.getElementById('pkg-id').value;
+  // Use raw string — numeric coercion would become NaN for Firestore-assigned
+  // string ids and the filter would silently keep the row.
+  const raw = document.getElementById('pkg-id').value;
+  if(!raw){ alert('No package selected.'); return; }
+  const id = String(raw);
   if(!confirm('Delete this package? All session and payment records for it will be lost.')) return;
-  DB.packages = DB.packages.filter(x=>x.id!==id);
+  DB.packages = DB.packages.filter(x => String(x.id) !== id);
   // Sync to Firestore if available
   if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
-    window.FirestoreCRUD.delete('packages', String(id)).catch(err => console.error("Firestore delete error:", err));
+    window.FirestoreCRUD.delete('packages', id).catch(err => console.error("Firestore delete error:", err));
   }
   saveData();
   closeModal('pkg-modal');
@@ -2419,10 +2461,11 @@ function deletePkg(){
 }
 
 function viewPkg(id){
-  currentPkgId = id;
-  const p = DB.packages.find(x=>x.id===id);
-  if(!p) return;
-  const c = DB.clients.find(x=>x.id===p.clientId);
+  // String-tolerant lookup — some pkg.ids are strings after Firestore hydration.
+  const p = DB.packages.find(x => String(x.id) === String(id));
+  if(!p){ alert('Package not found. It may have just been deleted — refresh the page.'); return; }
+  currentPkgId = p.id;
+  const c = DB.clients.find(x => String(x.id) === String(p.clientId));
   const s = pkgStats(p);
   const sessionRows = (p.sessions||[]).length
     ? p.sessions.slice().sort((a,b)=>b.date.localeCompare(a.date)).map((ss,i)=>`<tr>
@@ -2612,9 +2655,11 @@ function adjustSessionsUsed(pkgId){
 
 function removeSession(pkgId, sessionId){
   if(!confirm('Remove this session from the package? Any inventory deducted for it will be restored.')) return;
-  const p = DB.packages.find(x=>x.id===pkgId);
-  if(!p) return;
-  const removed = (p.sessions||[]).find(s=>s.id===sessionId);
+  // String-match so the call works for both numeric-id (local) and
+  // string-id (Firestore-rehydrated) packages.
+  const p = DB.packages.find(x => String(x.id) === String(pkgId));
+  if(!p){ alert('Package not found.'); return; }
+  const removed = (p.sessions||[]).find(s => String(s.id) === String(sessionId));
   if(removed){
     // Restore supplies if we have a snapshot; fall back to the treatment's current supplies
     const toRestore = Array.isArray(removed.supplies) && removed.supplies.length
@@ -2622,14 +2667,14 @@ function removeSession(pkgId, sessionId){
       : snapshotTreatmentSupplies(p.treatmentId);
     applyStockChange(p.branch, toRestore, -1);
   }
-  p.sessions = (p.sessions||[]).filter(s=>s.id!==sessionId);
+  p.sessions = (p.sessions||[]).filter(s => String(s.id) !== String(sessionId));
   if(p.status==='Completed' && p.sessions.length<p.totalSessions) p.status='Active';
   // Sync to Firestore if available
   if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
-    window.FirestoreCRUD.update('packages', String(pkgId), p).catch(err => console.error("Firestore update error:", err));
+    window.FirestoreCRUD.update('packages', String(p.id), p).catch(err => console.error("Firestore update error:", err));
   }
   saveData();
-  viewPkg(pkgId);
+  viewPkg(p.id);
   renderPackages();
   renderInventory && renderInventory();
   renderDashboard();
@@ -2677,11 +2722,16 @@ function openPaymentModal(pkgId){
 }
 
 function savePayment(){
-  const pkgId = +document.getElementById('pay-pkg-id').value;
+  // ⚠ Don't numeric-coerce pkgId. Some packages already have string ids in
+  // DB.packages (pushed there by firestore-layer rounds past), and `+"8"` +
+  // strict `===` would miss them. Root cause of "newer packages don't reflect
+  // the payment" in round 5. Use the raw string and String-match the lookup.
+  const pkgIdRaw = document.getElementById('pay-pkg-id').value;
   const amount = +document.getElementById('pay-amount').value;
   if(!amount || amount<=0){ alert('Enter a valid amount'); return; }
-  const p = DB.packages.find(x=>x.id===pkgId);
-  if(!p) return;
+  const p = DB.packages.find(x => String(x.id) === String(pkgIdRaw));
+  if(!p){ alert('Package not found. Close this dialog and try again.'); return; }
+  const pkgId = p.id; // preserve the matched package's real id (string or number)
   const method = document.getElementById('pay-method').value;
   const waived = document.getElementById('pay-waive').checked;
   const surcharge = computeSurcharge(amount, method, waived);
@@ -2710,7 +2760,7 @@ function savePayment(){
   closeModal('payment-modal');
   renderPackages();
   renderDashboard();
-  if(currentPkgId===pkgId){ viewPkg(pkgId); }
+  if(String(currentPkgId)===String(pkgId)){ viewPkg(pkgId); }
 }
 
 // -------- Add Payment (walk-in / comeback / one-off) --------
@@ -2829,7 +2879,7 @@ function searchWalkinClients(){
     return;
   }
   out.innerHTML = matches.map(c => {
-    return `<div style="cursor:pointer;padding:8px 10px;border:1px solid var(--border-blue);border-radius:4px;margin-bottom:4px;background:#fff" onclick="selectWalkinClient(${JSON.stringify(String(c.id))})" onmouseover="this.style.background='var(--blue-ghost)'" onmouseout="this.style.background='#fff'">
+    return `<div style="cursor:pointer;padding:8px 10px;border:1px solid var(--border-blue);border-radius:4px;margin-bottom:4px;background:#fff" onclick="selectWalkinClient(${idArg(c.id)})" onmouseover="this.style.background='var(--blue-ghost)'" onmouseout="this.style.background='#fff'">
       <div style="font-weight:600">${esc(c.lname)}, ${esc(c.fname)}</div>
       <div style="font-size:11px;color:var(--muted)">${esc(c.phone||'no phone')} · ${esc(branchName(c.homeBranch))} · ${esc(c.address||'no address')}</div>
     </div>`;
@@ -2839,53 +2889,29 @@ window.searchWalkinClients = searchWalkinClients;
 
 // Loads the picked client's info + active packages into the inline panel.
 function selectWalkinClient(clientId){
+  // Per user request (round 5): clicking a search result should jump
+  // straight to the same View Client window shown from the Clients tab,
+  // so reception can pick the specific package and hit its "+ Add Payment"
+  // button. That view already handles the full payment workflow (session
+  // logging, split payments, product purchases) — much cleaner than the
+  // in-modal mini-forms we had before. The mini-forms remain in the HTML
+  // as fallback, but this path supersedes them.
   try {
     const id = String(clientId);
     const c = (DB.clients||[]).find(x => String(x.id) === id);
     if(!c){ alert('Client not found.'); return; }
     selectedWalkinClientId = c.id;
-    // Collapse results, prefill search box
-    document.getElementById('walkin-search-results').innerHTML = '';
-    document.getElementById('walkin-search').value = c.lname + ', ' + c.fname;
-
-    const panel = document.getElementById('walkin-selected-client');
-    panel.style.display = '';
-
-    // Client info header
-    const activePkgs = (DB.packages||[]).filter(p => String(p.clientId) === String(c.id) && p.status === 'Active');
-    let pkgLines = '';
-    if(activePkgs.length){
-      pkgLines = '<div style="margin-top:6px;font-size:12px"><b>Active packages:</b><ul style="margin:4px 0;padding-left:18px">' +
-        activePkgs.map(p=>{
-          const s = pkgStats(p);
-          return `<li>${esc(p.packageName)} — ${s.sessionsUsed}/${p.totalSessions} availed, ${s.sessionsPaid} paid, balance ${money(s.balance)}</li>`;
-        }).join('') + '</ul></div>';
-    } else {
-      pkgLines = '<div style="margin-top:6px;font-size:12px;color:var(--muted)">No active packages. Payment will be recorded as a one-off service / product charge.</div>';
-    }
-    document.getElementById('walkin-client-info').innerHTML = `
-      <div><b>${esc(c.fname)} ${esc(c.lname)}</b></div>
-      <div style="font-size:12px;color:var(--muted)">${esc(c.phone||'no phone')} · ${esc(c.address||'no address')} · Home: ${esc(branchName(c.homeBranch))}</div>
-      ${pkgLines}
-    `;
-
-    // Apply-To dropdown: one-off + each active package
-    const applySel = document.getElementById('walkin-apply-to');
-    applySel.innerHTML = '<option value="oneoff">One-off service / product payment</option>' +
-      activePkgs.map(p=>{
-        const s = pkgStats(p);
-        return `<option value="pkg:${String(p.id)}">Package: ${esc(p.packageName)} (${s.sessionsUsed}/${p.totalSessions} availed, balance ${money(s.balance)})</option>`;
-      }).join('');
-    applySel.value = 'oneoff';
-
-    // Reset payment inputs
-    document.getElementById('walkin-exist-amount').value = 0;
-    document.getElementById('walkin-exist-method').value = 'Cash';
-    document.getElementById('walkin-exist-notes').value = '';
-    document.getElementById('walkin-oneoff-product').value = '';
-    const svcSel = document.getElementById('walkin-oneoff-svc');
-    if(svcSel) svcSel.value = '';
-    onWalkinApplyToChange();
+    closeModal('walkin-modal');
+    // Small defer so the close animation finishes and focus doesn't
+    // bounce between the two modals on Safari.
+    setTimeout(() => {
+      try {
+        viewClient(c.id);
+      } catch(e){
+        console.error('viewClient from walk-in failed:', e);
+        alert('Could not open client view: ' + (e && e.message || e));
+      }
+    }, 10);
   } catch(e){
     console.error('selectWalkinClient failed:', e);
     alert('Could not load that client: ' + (e && e.message || e));
@@ -3256,17 +3282,17 @@ window.deleteWalkin = deleteWalkin;
 
 function removePayment(pkgId, payId){
   if(!confirm('Remove this payment?')) return;
-  const p = DB.packages.find(x=>x.id===pkgId);
-  if(!p) return;
-  p.payments = (p.payments||[]).filter(x=>x.id!==payId);
+  const p = DB.packages.find(x => String(x.id) === String(pkgId));
+  if(!p){ alert('Package not found.'); return; }
+  p.payments = (p.payments||[]).filter(x => String(x.id) !== String(payId));
   // Re-derive sessions paid so it reflects the reduced total payments
   refreshPkgSessionsPaid(p);
   // Sync to Firestore if available
   if(window.useFirebase && window.useFirebase() && window.FirestoreCRUD) {
-    window.FirestoreCRUD.update('packages', String(pkgId), p).catch(err => console.error("Firestore update error:", err));
+    window.FirestoreCRUD.update('packages', String(p.id), p).catch(err => console.error("Firestore update error:", err));
   }
   saveData();
-  viewPkg(pkgId);
+  viewPkg(p.id);
   renderPackages();
   renderDashboard();
 }
