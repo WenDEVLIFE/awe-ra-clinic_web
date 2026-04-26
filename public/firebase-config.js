@@ -22,7 +22,15 @@ try {
   const app = firebase.initializeApp(firebaseConfig);
   db = firebase.firestore(app);
   auth = firebase.auth(app);
-  
+
+  // Round-6 change — require login on every page refresh.
+  // NONE = in-memory only; nothing persists across page reloads.
+  // This also clears any previously LOCAL-persisted session so the very first
+  // refresh after this deploys does NOT auto-restore the prior user.
+  auth.setPersistence(firebase.auth.Auth.Persistence.NONE)
+    .then(() => { if (auth.currentUser) auth.signOut(); })
+    .catch((e) => console.warn('Auth persistence (NONE) failed:', e.message));
+
   // Set up real-time auth listener
   firebase.auth().onAuthStateChanged((user) => {
     if (user) {
@@ -110,7 +118,8 @@ class DataLayer {
   static async loginWithEmail(email, password) {
     try {
       if (!auth) throw new Error("Firebase Auth not initialized");
-      await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
+      // Round-6: persistence is NONE — login does NOT survive a page refresh.
+      await auth.setPersistence(firebase.auth.Auth.Persistence.NONE);
       const result = await auth.signInWithEmailAndPassword(email, password);
       console.log("✅ Firebase login successful");
       return { success: true, user: result.user };
