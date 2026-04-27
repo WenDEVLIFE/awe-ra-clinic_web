@@ -3716,9 +3716,11 @@ window.onFirebaseReady = function(firebaseUser) {
   }
 };
 
-window.addEventListener('DOMContentLoaded', ()=>{
+window.addEventListener('DOMContentLoaded', async ()=>{
   refreshBranchSelectors();
-  // Check if Firebase has initialized with a user
+
+  // If Firebase has *already* confirmed an authenticated user (rare but possible
+  // with a fast warm cache), restore the session immediately and short-circuit.
   if(window.isFirebaseReady && window.isFirebaseReady()) {
     const firebaseUser = window.getCurrentFirebaseUser ? window.getCurrentFirebaseUser() : null;
     if(firebaseUser && typeof window.onFirebaseReady === 'function') {
@@ -3728,24 +3730,81 @@ window.addEventListener('DOMContentLoaded', ()=>{
     }
   }
 
-  // If Firebase auth hasn't finished yet, give it a short moment before falling back.
-  setTimeout(()=>{
-    const firebaseUser = window.getCurrentFirebaseUser ? window.getCurrentFirebaseUser() : null;
-    if(firebaseUser && typeof window.onFirebaseReady === 'function' && (!DB.session || !DB.session.user)){
-      console.log("🔐 Firebase user found after initial load, restoring session...");
-      window.onFirebaseReady(firebaseUser);
-      return;
+  // ---- Boot guard: prevent writes during the auth-restore gap ----
+  //
+  // Previously: if DB.session.user existed in localStorage, we hid the login
+  // overlay immediately and called refreshAll(). The user could then interact
+  // with the app DURING the gap before Firebase auth restored — and those
+  // writes would silently land in localStorage only because the CRUD save
+  // functions all check `useFirebase()` at write time. When auth eventually
+  // restored, the snapshot listeners overwrote local DB with stale Firestore
+  // data, swallowing the user's recent inputs.
+  //
+  // Now: if a previous localStorage session exists, we WAIT (up to 8s) for
+  // Firebase auth to confirm. While waiting, the login overlay stays visible
+  // with a "Reconnecting..." note so the user can't interact. If auth
+  // confirms, we hide the overlay and proceed. If auth doesn't confirm in
+  // 8s, we clear the stale localStorage session and force a fresh sign-in.
+  const hasLocalSession = !!(DB.session && DB.session.user);
+
+  if (hasLocalSession) {
+    // Show a reconnecting indicator on the login card so the user knows
+    // the app is alive. (The overlay is visible by default at this point.)
+    try {
+      const card = document.querySelector('#login-overlay .login-card');
+      if (card && !document.getElementById('reconnect-note')){
+        const note = document.createElement('div');
+        note.id = 'reconnect-note';
+        note.style.cssText = 'margin-top:10px;padding:8px 12px;background:#e8f4fd;color:#1f4f9c;border-radius:4px;font-size:13px;text-align:center';
+        note.textContent = '🔄 Reconnecting to Firebase as ' + (DB.session.user.email || DB.session.user.name) + '…';
+        card.appendChild(note);
+      }
+    } catch(e){}
+
+    // Poll for Firebase auth to confirm the user (up to 8 seconds).
+    const restored = await new Promise(resolve => {
+      let attempts = 0;
+      const MAX_ATTEMPTS = 80; // 8s @ 100ms
+      const tick = () => {
+        const fbUser = window.getCurrentFirebaseUser ? window.getCurrentFirebaseUser() : null;
+        if (fbUser) { resolve({ok:true, user:fbUser}); return; }
+        if (window.useFirebase && window.useFirebase()) { resolve({ok:true, user:null}); return; }
+        if (++attempts >= MAX_ATTEMPTS) { resolve({ok:false}); return; }
+        setTimeout(tick, 100);
+      };
+      tick();
+    });
+
+    // Remove the reconnecting note regardless of outcome.
+    const note = document.getElementById('reconnect-note');
+    if (note) note.remove();
+
+    if (restored.ok) {
+      // Auth restored — proceed normally. onAuthStateChanged should have already
+      // (or will imminently) call onFirebaseReady, which restores the session.
+      console.log("🔐 Firebase auth confirmed — restoring session.");
+      const fbUser = restored.user || (window.getCurrentFirebaseUser && window.getCurrentFirebaseUser());
+      if (fbUser && typeof window.onFirebaseReady === 'function') {
+        window.onFirebaseReady(fbUser);
+      } else {
+        // Fall back to localStorage session restore (Firebase ready but no user obj)
+        document.getElementById('login-overlay').style.display='none';
+        document.getElementById('branch-selector').value = DB.session.branch;
+        document.getElementById('user-pill').textContent = DB.session.user.name + ' (' + DB.session.user.role + ')';
+        refreshAll();
+        setTimeout(() => forceRefreshAllUI(), 800);
+      }
+    } else {
+      // Auth didn't restore — force re-login. Clear the stale localStorage
+      // session so subsequent boot doesn't re-enter this path.
+      console.warn("⚠️  Firebase auth didn't restore within 8s — forcing fresh sign-in.");
+      DB.session = null;
+      try { saveData(); } catch(e){}
+      document.getElementById('login-overlay').style.display = 'flex';
     }
-    if(window.SessionManager && window.SessionManager && window.SessionManager._didRestore) return;
-  }, 500);
-  
-  // Check localStorage for existing session (non-Firebase fallback)
-  if(DB.session && DB.session.user){
-    document.getElementById('login-overlay').style.display='none';
-    document.getElementById('branch-selector').value = DB.session.branch;
-    document.getElementById('user-pill').textContent = DB.session.user.name + ' (' + DB.session.user.role + ')';
-    refreshAll();
-    // Also refresh after Firestore listeners connect (1-2 seconds)
-    setTimeout(() => forceRefreshAllUI(), 1500);
+    return;
   }
+
+  // No previous session — just leave the login overlay visible (it's the default).
+  document.getElementById('login-overlay').style.display = 'flex';
 });
