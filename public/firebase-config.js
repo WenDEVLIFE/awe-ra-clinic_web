@@ -23,6 +23,14 @@ try {
   db = firebase.firestore(app);
   auth = firebase.auth(app);
 
+  // Defensive: explicitly set LOCAL persistence at init time, BEFORE attaching
+  // the listener. (LOCAL is Firebase's default, but a previously-deployed
+  // round-6 set NONE — explicitly setting LOCAL again ensures any restored
+  // auth state from IndexedDB persists across refreshes.)
+  auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
+    .then(() => console.log("🔐 Auth persistence: LOCAL"))
+    .catch((e) => console.warn('setPersistence(LOCAL) at init failed:', e.message));
+
   // Set up real-time auth listener
   firebase.auth().onAuthStateChanged((user) => {
     if (user) {
@@ -36,21 +44,27 @@ try {
         window.onFirebaseReady(user);
       }
     } else {
-      console.log("⚠️  Firebase Auth: No user or using demo mode");
+      console.log("⚠️  Firebase Auth: No active user (awaiting sign-in)");
       useFirebase = false;
       firebaseReady = true;
       currentFirebaseUser = null;
-      updateFirebaseStatus("Demo Mode");
+      // Note: status stays "Awaiting sign-in" rather than "Demo Mode" until the
+      // boot timeout below confirms auth truly didn't restore. This prevents the
+      // misleading "Demo Mode" flash during normal slow auth-restore loads.
+      updateFirebaseStatus("Awaiting sign-in");
     }
   });
-  
+
+  // Bumped to 8s (was 3s). Slow networks / cold IndexedDB reads can take >3s
+  // to restore a persisted user; a too-eager timeout flips the visible status
+  // to "Demo Mode" and panics the user.
   setTimeout(() => {
     firebaseReady = true;
     if (!useFirebase) {
-      console.log("ℹ️  Using localStorage fallback (demo mode)");
-      updateFirebaseStatus("Demo Mode");
+      console.log("ℹ️  Auth did not restore within 8s — Firebase ready, awaiting sign-in.");
+      updateFirebaseStatus("Awaiting sign-in");
     }
-  }, 3000);
+  }, 8000);
   
 } catch (error) {
   console.warn("⚠️  Firebase initialization warning:", error.message);
