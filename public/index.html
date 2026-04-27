@@ -294,15 +294,12 @@
       <button class="btn secondary" onclick="exportAllData()">⬇ Export All Data (JSON)</button>
       <button class="btn secondary" onclick="startImportData()">⬆ Import Data</button>
       <input type="file" id="import-file" accept=".json" style="display:none" onchange="importData(event)"/>
-      <button class="btn danger" onclick="resetAllData()">🗑 Reset Demo Data</button>
     </div>
 
     <h3 style="margin-top:24px">About This System</h3>
     <div class="panel" style="font-size:13px;line-height:1.6">
-      <p><b>Awe-RA Clinic Management System — Prototype v1.0</b></p>
-      <p>This is a <b>working prototype</b> that runs entirely in your browser. All data is currently stored locally on this computer (browser storage). To make it accessible from any computer nationwide, please read the <b>Deployment Guide</b> document that was delivered alongside this file.</p>
-      <p><b>Features included:</b> client records (shared across branches), appointment scheduling (per-branch calendar), inventory management (per-branch stock), multi-branch support, user roles (admin/reception/therapist), data export/import.</p>
-      <p><b>Next steps to go nationwide:</b> host on cloud (Firebase / Supabase recommended), add real authentication, enable real-time sync between branches.</p>
+      <p><b>Awe-Ra Aesthetic &amp; Wellness Clinic — Management System</b></p>
+      <p>Cloud-synced multi-branch system running on Firebase. Client records, appointment scheduling, inventory, packages, and sales are kept in sync in real time across every signed-in device. Data export and import (JSON) are available above for backups or migrations.</p>
     </div>
   </section>
 </main>
